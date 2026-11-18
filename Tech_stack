@@ -28,6 +28,15 @@ Focus strictly on the practical concepts below. Everything else in the documenta
 * **Must Know:** Building rapid Python web UIs with `st.title`, `st.form`, `st.dataframe`, and `st.sidebar`; connecting the UI to FastAPI using Python's `requests.get()` and `requests.post()`.
 * **Safe to Skip:** Custom React components, advanced CSS hacks, custom theming.
 
+
+## 6: Add Two High-Impact "Digital-Tier" Upgrades
+To separate yourself from candidates who only build basic CRUD apps, add these two small upgrades to each repository:
+
+* **Upgrade 1: Add a `Dockerfile` or `docker-compose.yml`:** Even if you run the apps locally during your screen-share, having a clean `Dockerfile` in your GitHub repo proves you understand containerization and deployment.
+* **Upgrade 2: Add a `test_api.py` file using `pytest`:** Write 3 simple automated tests using FastAPI's `TestClient` (e.g., testing that an expense with `amount = -50` fails with a `422 Unprocessable Entity` Pydantic error). Interviewers love seeing proof that your validation works.
+
+---
+
 ---
 
 ## 2. How TCS Digital Interviewers Evaluate Your Project
