@@ -1,0 +1,30 @@
+# TCS Digital Master Guide: Building & Presenting Both Dual-Database Projects
+
+## Step 1: Build Both in a Shared Template Pattern
+Because both projects use the exact same structure (`backend.py`, `frontend.py`, `.env`, `requirements.txt`), build **Roadmap A first**, then clone your folder structure for **Roadmap B**.
+
+* **How to start Roadmap A (Expense Tracker):** Set up two SQLAlchemy engines in `backend.py` (`mysql_engine` and `sqlite_engine`). Write a helper function `log_action(db_sqlite, message)` that gets called inside both `POST /expenses` and `DELETE /expenses/{id}`.
+* **How to start Roadmap B (IT Helpdesk):** Reuse your dual-engine setup, swap the tables to `Ticket` (MySQL) and `FAQ` (SQLite), and add a FastAPI `@asynccontextmanager` **lifespan** function that checks if the SQLite `FAQ` table is empty on startup and inserts 5 default IT fixes.
+
+
+## Step 3: Structure Your 90-Second Interview Pitch
+When the panel asks *"Walk me through your projects,"* present them as a **pair** rather than two disconnected apps:
+
+1. **The Hook:** *"I built two full-stack applications—a FinTech Expense Tracker and an Enterprise IT Helpdesk—using a decoupled FastAPI and Streamlit architecture with a dual-database design."*
+2. **The Architecture:** *"Streamlit acts purely as a thin client communicating via REST APIs. FastAPI enforces strict schema validation at the boundary using Pydantic before any data touches the database."*
+3. **The Key Differentiator (Dual-DB):** *"Instead of putting everything into one database, I used MySQL for ACID-compliant transactional records and paired it with SQLite for lightweight operations—asynchronous-style audit logging in the Expense Tracker, and zero-latency FAQ self-help reads in the Helpdesk portal to reduce load on the primary database."*
+4. **Production Awareness:** *"To keep development clean and focused on core data flow, I omitted JWT boilerplate, though adding OAuth2 middleware in FastAPI and migrating SQLite logs to Redis or Elasticsearch would be my immediate production upgrades."*
+
+---
+
+## Step 4: Prepare for Deep-Dive Panel Questions
+TCS Digital interviewers frequently drill down into the *"why"* behind your code. Be ready to answer these four questions:
+
+* **"Why did you use Pydantic if MySQL already has column data types?"**
+  * *Answer:* Pydantic fails fast at the API layer before opening a database transaction, saving database connections and returning clean, structured `422` validation errors to the frontend.
+* **"What happens in Roadmap A if the MySQL insert succeeds, but the SQLite log write fails?"**
+  * *Answer:* Since they are separate database engines without a distributed two-phase commit, the expense saves in MySQL while the log might miss. In production, I would decouple logging using FastAPI `BackgroundTasks` or a message queue with retry logic.
+* **"How does SQLAlchemy prevent SQL Injection in your projects?"**
+  * *Answer:* SQLAlchemy ORM uses parameterized queries (bound parameters) under the hood, ensuring user inputs are treated strictly as data values rather than executable SQL commands.
+* **"Why use Streamlit instead of React?"**
+  * *Answer:* Streamlit allowed rapid UI prototyping in pure Python while keeping the backend 100% decoupled via REST endpoints—meaning a React or mobile frontend could consume the exact same FastAPI backend without changing a single line of server code.
