@@ -1,0 +1,260 @@
+# NOTE 04: SQLALCHEMY ORM & DUAL-DATABASE SETUP NOTES
+## Complete Bit-by-Bit Study Guide & Code Examples for Zaika Restaurant Management System
+
+================================================================================
+1. WHAT IS SQLALCHEMY ORM & WHY WE USE TWO DATABASES
+================================================================================
+An Object-Relational Mapper (ORM) lets you interact with your database using Python classes and objects instead of writing raw SQL strings everywhere. SQLAlchemy automatically translates Python commands like `db.add(new_order)` into safe, parameterized SQL `INSERT` statements.
+
+Zaika's Hybrid Dual-Database Architecture:
+1. MySQL (`zaika_db`): Primary relational server database storing all 10 core business tables (users, tables, menu, orders, order items, bills, payments, waiter alerts, reviews, loyalty rewards).
+2. SQLite (`audit_logs.db`): Secondary lightweight file database storing rapid system audit trails (staff logins, order status transitions, bill closures) without adding extra write load to MySQL.
+
+================================================================================
+2. CONFIGURING BOTH ENGINES & SESSIONS (`backend/database.py`)
+================================================================================
+In `database.py`, we create two separate SQLAlchemy engines (`mysql_engine` and `sqlite_engine`), two session factories, and two dependency generators (`get_db` and `get_audit_db`) that FastAPI injects automatically into your endpoints using `Depends()`.
+
+```python
+import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+load_dotenv()
+
+# 1. Primary MySQL Database Connection
+MYSQL_URL = os.getenv(
+    "MYSQL_URL",
+    "mysql+pymysql://root:password@localhost:3306/zaika_db"
+)
+mysql_engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+MySQLSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=mysql_engine)
+Base = declarative_base()
+
+# 2. Secondary SQLite Audit Log Connection
+SQLITE_URL = os.getenv("SQLITE_URL", "sqlite:///./audit_logs.db")
+sqlite_engine = create_engine(
+    SQLITE_URL,
+    connect_args={"check_same_thread": False}  # Required for SQLite with FastAPI
+)
+SQLiteSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sqlite_engine)
+AuditBase = declarative_base()
+
+# FastAPI Dependency for MySQL
+def get_db():
+    db = MySQLSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# FastAPI Dependency for SQLite Audit Logs
+def get_audit_db():
+    audit_db = SQLiteSessionLocal()
+    try:
+        yield audit_db
+    finally:
+        audit_db.close()
+```
+
+================================================================================
+3. DEFINING ORM MODELS & RELATIONSHIPS (`backend/models.py`)
+================================================================================
+Each Python class inheriting from `Base` becomes a table in MySQL, while classes inheriting from `AuditBase` become tables in SQLite. `relationship()` links parent and child objects together in Python.
+
+```python
+from datetime import datetime
+from sqlalchemy import (
+    Column, Integer, String, Float, Boolean, DateTime,
+    ForeignKey, Enum, Text, Numeric
+)
+from sqlalchemy.orm import relationship
+from backend.database import Base, AuditBase
+
+# --- MYSQL CORE TABLES ---
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(100), nullable=False)
+    email = Column(String(120), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(Enum("staff", "kitchen", "owner", name="user_roles"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class RestaurantTable(Base):
+    __tablename__ = "restaurant_tables"
+    id = Column(Integer, primary_key=True, index=True)
+    table_number = Column(String(10), unique=True, nullable=False)
+    capacity = Column(Integer, default=4, nullable=False)
+    qr_token = Column(String(64), unique=True, nullable=False)
+    status = Column(
+        Enum("Empty", "Ordering", "Eating", "Bill Requested", "Needs Help", name="table_status"),
+        default="Empty"
+    )
+    current_points = Column(Integer, default=0)
+
+    orders = relationship("Order", back_populates="table")
+
+class MenuItem(Base):
+    __tablename__ = "menu_items"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    category = Column(Enum("Main Course", "Sides", "Drinks", "Deals", name="menu_cat"), nullable=False)
+    kitchen_station = Column(Enum("Tandoor", "Curry", "Drinks", name="kds_station"), nullable=False)
+    price_half = Column(Numeric(10, 2), nullable=True)
+    price_full = Column(Numeric(10, 2), nullable=False)
+    is_veg = Column(Boolean, default=True)
+    spice_levels = Column(String(50), default="Mild,Medium,Hot")
+    allergens = Column(String(100), nullable=True)
+    deal_badge = Column(String(50), nullable=True)
+    prep_time_mins = Column(Integer, default=15)
+    image_url = Column(String(255), nullable=True)
+    is_available = Column(Boolean, default=True)
+
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True, index=True)
+    table_id = Column(Integer, ForeignKey("restaurant_tables.id"), nullable=False)
+    confirmed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(
+        Enum("Placed", "Confirmed", "Cooking", "Ready", "Served", "Closed", name="order_status"),
+        default="Placed"
+    )
+    placed_at = Column(DateTime, default=datetime.utcnow)
+    cooking_started_at = Column(DateTime, nullable=True)
+    estimated_ready_at = Column(DateTime, nullable=True)
+
+    table = relationship("RestaurantTable", back_populates="orders")
+    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False)
+    menu_item_id = Column(Integer, ForeignKey("menu_items.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    portion_size = Column(Enum("Half", "Full", name="portion_enum"), default="Full")
+    spice_choice = Column(Enum("Mild", "Medium", "Hot", name="spice_enum"), default="Medium")
+    unit_price = Column(Numeric(10, 2), nullable=False)
+    item_status = Column(Enum("Pending", "Cooking", "Ready", name="item_status_enum"), default="Pending")
+
+    order = relationship("Order", back_populates="items")
+    menu_item = relationship("MenuItem")
+
+# --- SQLITE AUDIT LOG TABLE ---
+
+class ActivityLog(AuditBase):
+    __tablename__ = "activity_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    actor_role = Column(String(20), nullable=False)
+    actor_id = Column(Integer, nullable=True)
+    action = Column(String(100), nullable=False)
+    details = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+```
+
+Automatically Creating All Tables on App Startup (in `main.py`):
+```python
+from backend.database import mysql_engine, sqlite_engine, Base, AuditBase
+from backend import models
+
+Base.metadata.create_all(bind=mysql_engine)
+AuditBase.metadata.create_all(bind=sqlite_engine)
+```
+
+================================================================================
+4. ORM CRUD QUERIES & ATOMIC TRANSACTIONS IN FASTAPI
+================================================================================
+Real restaurant operations touch multiple tables at once. For example, when a customer places a QR order:
+1. Verify the table exists in MySQL.
+2. Create the parent `Order` row.
+3. Loop through items, look up live prices from `MenuItem`, and create `OrderItem` rows.
+4. Update `RestaurantTable.status` to `"Ordering"` and award loyalty points.
+5. Commit MySQL atomically (`db.commit()`)—if anything fails, `db.rollback()` undoes partial writes!
+6. Write an audit record into SQLite (`audit_db.add(...)`).
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from backend.database import get_db, get_audit_db
+from backend.models import RestaurantTable, MenuItem, Order, OrderItem, ActivityLog
+from backend.schemas import OrderCreate
+
+router = APIRouter(prefix="/api/orders", tags=["Orders"])
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def place_customer_order(
+    payload: OrderCreate,
+    db: Session = Depends(get_db),
+    audit_db: Session = Depends(get_audit_db)
+):
+    # 1. Verify Table Exists
+    table = db.query(RestaurantTable).filter(RestaurantTable.id == payload.table_id).first()
+    if not table:
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    try:
+        # 2. Create Parent Order
+        new_order = Order(table_id=table.id, status="Placed")
+        db.add(new_order)
+        db.flush()  # Generates new_order.id before final commit
+
+        # 3. Create Child Order Items
+        for item in payload.items:
+            dish = db.query(MenuItem).filter(
+                MenuItem.id == item.menu_item_id,
+                MenuItem.is_available == True
+            ).first()
+            if not dish:
+                raise HTTPException(status_code=404, detail=f"Dish ID {item.menu_item_id} unavailable")
+
+            price = dish.price_half if (item.portion_size == "Half" and dish.price_half) else dish.price_full
+
+            order_item = OrderItem(
+                order_id=new_order.id,
+                menu_item_id=dish.id,
+                quantity=item.quantity,
+                portion_size=item.portion_size,
+            spice_choice=item.spice_choice,
+unit_price=price
+)
+db.add(order_item)
+# 4. Update Table Status & Points
+table.status = "Ordering"
+table.current_points += 20
+# 5. Atomic Commit to MySQL
+db.commit()
+db.refresh(new_order)
+except HTTPException:
+db.rollback()
+raise
+except Exception as exc:
+db.rollback()
+raise HTTPException(status_code=500, detail=f"Database error: {str(exc)}")
+# 6. Log Event to SQLite Audit Database
+log_entry = ActivityLog(
+actor_role="customer",
+actor_id=table.id,
+action="ORDER_PLACED",
+details=f"Table {table.table_number} placed Order #{new_order.id} ({len(payload.items)} items)"
+)
+audit_db.add(log_entry)
+audit_db.commit()
+return {"message": "Order placed successfully", "order_id": new_order.id, "status": new_order.status}
+```
+Common SQLAlchemy Query Patterns Cheat Sheet:
+• Fetch all records: db.query(MenuItem).all()
+• Filter with multiple conditions: db.query(MenuItem).filter(MenuItem.is_veg == True, MenuItem.is_available == True).all()
+• Fetch single record or None: db.query(Order).filter(Order.id == order_id).first()
+• Delete a record:
+  python dish = db.query(MenuItem).filter(MenuItem.id == item_id).first() if dish: db.delete(dish) db.commit()   
+
+================================================================================
+5. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 05)
+
+1. Create backend/database.py and backend/models.py (adding the remaining 5 tables: Bill, Payment, CallWaiterRequest, Review, and Reward following the exact pattern above).
+2. Run your FastAPI server and verify that all 10 tables appear automatically inside MySQL Workbench (zaika_db) and audit_logs.db appears in your project folder.
+3. Call POST /api/orders/ via Swagger UI (/docs) and inspect both MySQL and audit_logs.db to confirm rows were written to both databases!
