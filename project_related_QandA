@@ -1,0 +1,98 @@
+# ZAIKA — FAANG & PRODUCT-TIER SYSTEM DESIGN INTERVIEW Q&A
+## Architecture Trade-offs, Concurrency, Database Scaling & Security Deep-Dive
+
+================================================================================
+Q1. CONCURRENCY & RACE CONDITIONS (SPLIT BILLING & DOUBLE PAYMENTS)
+================================================================================
+Question:
+Suppose four friends at Table T4 select "Split by 4" on their phones and tap "Pay Now" at the exact same millisecond. How do you prevent double-charging, lost updates, or an inconsistent bill_status in MySQL?
+
+Model Answer:
+1. Pessimistic Row Locking: When processing POST /api/payments, wrap the transaction in a database row lock using SQLAlchemy's .with_for_update() on the bills row. This forces concurrent payment requests for the same bill to execute sequentially rather than reading stale amount_paid totals simultaneously.
+2. Idempotency Keys: Each payment request generates a unique client-side idempotency_key (UUID). If a customer's mobile network drops and retries the request, the backend checks the key and returns the original receipt instead of charging twice.
+3. Atomic State Transition: Within the same database transaction, sum all payments linked to bill_id. Only when total_paid >= grand_total does the transaction atomically set bill_status = 'Paid', close all active table orders, and reset restaurant_tables.status = 'Empty'.
+
+================================================================================
+Q2. REAL-TIME UPDATES & POLLING BOTTLENECKS (KDS & CALL WAITER)
+================================================================================
+Question:
+Currently, Streamlit polls FastAPI for KDS tickets and Call Waiter alerts. If Zaika scales from 6 tables in one restaurant to 500 restaurants with 10,000 concurrent diners, polling will crush your MySQL database. How would you re-architect real-time updates?
+
+Model Answer:
+1. Replace HTTP Polling with WebSockets / SSE: For the Kitchen Display System and Staff Floor Map, replace periodic GET polling with FastAPI WebSockets or Server-Sent Events (SSE) backed by Redis Pub/Sub.
+2. Event-Driven Push: When a customer places an order or taps "Call Waiter", FastAPI writes to MySQL and publishes an event to a restaurant-specific Redis channel (e.g., restaurant:101:kds). Only connected kitchen and staff tablets for that restaurant receive an instant push update, dropping idle database read queries by over 95%.
+
+================================================================================
+Q3. SECURITY & QR CODE SPOOFING PREVENTION
+================================================================================
+Question:
+Your customer QR menu requires zero login (?table=T1&token=tok_t1_99a1). What stops a prankster from saving that URL at home and placing Rs. 50,000 worth of fake orders for Table T1 three days later?
+
+Model Answer:
+1. Rotating Session Tokens: Instead of a permanent static qr_token, implement a dynamic session token that rotates automatically every time a table resets to Empty after payment, or expires after a 2-hour dining window.
+2. Two-Step Staff Confirmation Gate: Zaika includes a human-in-the-loop safeguard—customer orders enter as 'Placed' and do not fire to the kitchen until floor staff visually verify the occupied table and click "Send to Kitchen".
+3. Rate Limiting & Geofencing: Add Redis-backed rate limiting (e.g., max 3 unconfirmed orders per table per 10 minutes) and optional restaurant WiFi IP/geofence validation.
+
+================================================================================
+Q4. DATABASE DESIGN & HISTORICAL DATA INTEGRITY
+================================================================================
+Question:
+Why did you store unit_price inside order_items when price_full and price_half already exist in menu_items? Doesn't that violate 3NF database normalization?
+
+Model Answer:
+1. Intentional Denormalization for Point-in-Time Accuracy: Strictly speaking, storing unit_price in order_items is a deliberate, controlled denormalization—and it is essential in e-commerce and POS systems.
+2. Business Justification: If the restaurant owner raises Paneer Tikka from Rs. 260 to Rs. 300 next week, referencing menu_items.price_full dynamically would retroactively corrupt historical bills, tax reports, and GST audits from past months. Storing unit_price preserves an immutable financial snapshot of what the customer actually agreed to pay at order time.
+
+================================================================================
+Q5. DUAL-DATABASE CONSISTENCY (MYSQL VS. SQLITE)
+================================================================================
+Question:
+In your architecture, you commit business state to MySQL and then write an audit log to SQLite (audit_logs.db). What happens if MySQL commits successfully, but the server crashes before SQLite finishes writing? Also, why would SQLite fail in a multi-container deployment?
+
+Model Answer:
+1. Failure Mode & Outbox Pattern: Because MySQL and SQLite are separate engines without a distributed two-phase commit, a crash between commits can cause missing audit logs. At scale, use the Transactional Outbox Pattern—writing the audit event into an outbox table inside the same MySQL transaction, and having a background worker asynchronously flush events to the audit store.
+2. Container Scaling Limitation: SQLite is file-based and locks the entire file during writes. If we scale zaika_backend horizontally across 3 Docker containers behind a load balancer, each container would have its own isolated local .db file (causing split audit logs) or suffer "database is locked" errors on a shared network volume. For multi-instance production, migrate audit logs to PostgreSQL/MySQL or Elasticsearch.
+
+================================================================================
+Q6. DATABASE QUERY OPTIMIZATION & INDEXING (OWNER ANALYTICS)
+================================================================================
+Question:
+Your Owner Dashboard runs SUM and GROUP BY queries across orders and order_items to calculate daily revenue and top-selling dishes. After 2 years and 5 million rows, that dashboard takes 8 seconds to load. How do you bring it under 50 milliseconds?
+
+Model Answer:
+1. Composite Indexing: Add composite indexes on (status, placed_at) in orders and (menu_item_id, order_id) in order_items so MySQL performs fast index range scans instead of full table scans.
+2. Pre-Aggregated Materialized Summary Tables: Historical days never change. Instead of recalculating 5 million rows on every dashboard load, a nightly cron job or event consumer aggregates closed orders into a daily_sales_summary table. The dashboard then queries 1 row per day plus only today's live orders.
+3. Redis Caching: Cache the Owner Dashboard summary response in Redis with a 30-second TTL (Time-To-Live).
+
+================================================================================
+Q7. DISTRIBUTED KDS CONSISTENCY (PARTIAL STATION COMPLETION)
+================================================================================
+Question:
+Suppose Table T2 orders Tandoori Roti (Tandoor station) and Butter Chicken (Curry station). Tandoor finishes in 4 minutes, while Curry takes 16 minutes. How does your data model handle partial readiness without serving cold bread?
+
+Model Answer:
+1. Granular Item-Level State Machine: The schema decouples orders.status (macro order state) from order_items.item_status (micro station state: Pending -> Cooking -> Ready).
+2. Synchronized Dispatch: Each station marks its own items Ready independently. The KDS UI displays a progress indicator (e.g., "1/2 Items Ready") and only triggers the final "Ready for Pickup" alert to floor staff when COUNT(*) WHERE item_status != 'Ready' reaches 0, ensuring all dishes arrive hot together.
+
+================================================================================
+Q8. FASTAPI PERFORMANCE (ASYNC VS. SYNC BOTTLENECKS)
+================================================================================
+Question:
+FastAPI is famous for async/await high concurrency, yet standard SQLAlchemy sessions (SessionLocal) and pymysql are synchronous blocking calls. How does mixing async def routes with blocking database calls hurt throughput in FastAPI?
+
+Model Answer:
+1. Event Loop Blocking: If you declare an endpoint with async def and run a blocking synchronous db.query() inside it, Python blocks the single-threaded Uvicorn event loop, freezing all other incoming requests until MySQL responds.
+2. The Fix: Either define endpoints with standard def (so FastAPI automatically runs them safely in an external threadpool) or upgrade the data layer to SQLAlchemy 2.0 AsyncSession with the non-blocking aiomysql / asyncmy driver.
+
+================================================================================
+Q9. JWT SECURITY & INSTANT REVOCATION
+================================================================================
+Question:
+Your JWT tokens expire after an 8-hour shift. Suppose a waiter is fired mid-shift at 2:00 PM and the Owner sets is_active = False in MySQL. Why is is_active alone insufficient if you only decode the JWT signature, and how do you handle revocation without hurting latency?
+
+Model Answer:
+1. Stateless JWT Trade-off: Pure stateless JWTs remain valid until exp even after a user is deactivated. In Zaika's get_current_user() dependency, we explicitly query User.is_active == True, which immediately blocks deactivated staff.
+2. Scaling Revocation with Redis Denylist: To avoid hitting MySQL on every single API request at high scale, store revoked token IDs (jti) in a Redis Denylist with a TTL matching the token's remaining lifetime. Checking a key in Redis takes less than 1 millisecond in memory.
+
+================================================================================
+Q10. SYSTEM DESIGN: OFFLINE RESILIENCE (INTERNET OUTAGE)
