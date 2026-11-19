@@ -1,0 +1,513 @@
+# NOTE 06: STREAMLIT & PLOTLY FRONTEND UI NOTES
+## Complete Bit-by-Bit Study Guide & UI Examples for Zaika Restaurant Management System
+
+================================================================================
+1. HOW STREAMLIT POWERS ZAIKA'S 4 INTERFACES
+================================================================================
+Streamlit turns pure Python scripts into interactive web applications without requiring HTML, CSS, or JavaScript. Whenever a user clicks a button or selects a filter, Streamlit reruns the Python script from top to bottom.
+
+Zaika's Multi-Page Frontend Architecture:
+- `frontend/app.py`: Entry point. Checks URL query parameters (`?table=T1&token=...`) to launch the Customer Mobile QR Menu automatically, or renders the Staff/Kitchen/Owner Login screen.
+- `frontend/pages/1_Customer_QR_Menu.py`: Mobile dish cards, Veg/Allergen/Search filters, interactive cart, live cooking timer, Free WiFi, 200-pt Mango Lassi progress bar, Spice Quiz, Table vs. Table leaderboard, and Call Waiter alert button.
+- `frontend/pages/2_Staff_Floor_Map.py`: Live T1–T6 floor grid, pending customer order confirmation ("Send to Kitchen"), and Call Waiter alert resolver.
+- `frontend/pages/3_Kitchen_Display.py`: 3-column KDS board (`Tandoor`, `Curry`, `Drinks`) with Green/Yellow/Red urgency timers.
+- `frontend/pages/4_Billing_Checkout.py`: Itemized bill, 2/3/4 or per-item split calculator, tip selector, 5 payment methods, and post-payment 1–5 star review form.
+- `frontend/pages/5_Owner_Dashboard.py`: Live KPI metrics, Plotly sales & top-dish charts, waiter SLA speed, and Menu/Staff management.
+
+================================================================================
+2. SESSION STATE (`st.session_state`) & QR QUERY PARAMS (`st.query_params`)
+================================================================================
+Because Streamlit reruns your script on every click, variables reset unless stored inside `st.session_state`.
+
+```python
+import streamlit as st
+
+st.set_page_config(page_title="Zaika Restaurant", page_icon="🍛", layout="wide")
+
+# Initialize persistent session variables
+if "cart" not in st.session_state:
+    st.session_state.cart = []            # List of selected dish dicts
+if "jwt_token" not in st.session_state:
+    st.session_state.jwt_token = None     # Staff/Kitchen/Owner Bearer token
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None     # 'staff', 'kitchen', or 'owner'
+if "table_info" not in st.session_state:
+    st.session_state.table_info = None    # Verified QR table dict
+
+# Read QR Code URL parameters: e.g., http://localhost:8501/?table=T1&token=tok_t1_99a1
+params = st.query_params
+qr_table = params.get("table")
+qr_token = params.get("token")
+```
+
+================================================================================
+3. REUSABLE FASTAPI CLIENT (`frontend/utils/api_client.py`)
+================================================================================
+Instead of repeating `requests.get()` and `try/except` blocks on every page, wrap all HTTP calls in one clean helper module that automatically attaches the logged-in user's JWT token.
+
+```python
+import os
+import requests
+import streamlit as st
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+def _get_headers() -> dict:
+    token = st.session_state.get("jwt_token")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+def api_get(endpoint: str, params: dict = None):
+    try:
+        res = requests.get(
+            f"{API_BASE_URL}{endpoint}",
+            params=params,
+            headers=_get_headers(),
+            timeout=5
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Connection Error: {err}")
+        return None
+
+def api_post(endpoint: str, payload: dict):
+    try:
+        res = requests.post(
+            f"{API_BASE_URL}{endpoint}",
+            json=payload,
+            headers=_get_headers(),
+            timeout=5
+        )
+        if res.status_code >= 400:
+            detail = res.json().get("detail", "Request failed")
+            st.error(f"Error ({res.status_code}): {detail}")
+            return None
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Connection Error: {err}")
+        return None
+
+def api_patch(endpoint: str, payload: dict = None):
+    try:
+        res = requests.patch(
+            f"{API_BASE_URL}{endpoint}",
+            json=payload or {},
+            headers=_get_headers(),
+            timeout=5
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Update Error: {err}")
+        return None
+```
+
+================================================================================
+4. CUSTOMER QR MENU, CART & CALL WAITER (`1_Customer_QR_Menu.py`)
+================================================================================
+Combines menu filters, customization selectors (Half/Full, Mild/Medium/Hot), live loyalty progress bar (`st.progress`), and instant Call Waiter buttons.
+
+```python
+import streamlit as st
+from frontend.utils.api_client import api_get, api_post
+
+table = st.session_state.get("table_info")
+if not table:
+    st.warning("Please scan a valid Table QR Code to open the menu.")
+    st.stop()
+
+st.title(f"🍛 Zaika Digital Menu — Table {table['table_number']}")
+
+# Top Bar: Loyalty Progress & Call Waiter
+col_pts, col_waiter = st.columns([2, 1])
+with col_pts:
+    pts = table.get("current_points", 160)
+    st.write(f"**Loyalty Rewards:** {pts} / 200 pts (Free Mango Lassi at 200 pts!)")
+    st.progress(min(pts / 200, 1.0))
+
+with col_waiter:
+    help_type = st.selectbox("Need Assistance?", ["Water", "Napkins", "Bill", "Other Help"])
+    if st.button("🔔 Call Waiter", use_container_width=True):
+        res = api_post("/api/alerts", {"table_id": table["id"], "request_type": help_type})
+        if res:
+            st.toast(f"Waiter alerted for {help_type}!")
+
+st.divider()
+
+# Menu Filters
+f1, f2, f3 = st.columns([2, 1, 2])
+category = f1.selectbox("Category", ["All", "Main Course", "Sides", "Drinks", "Deals"])
+veg_only = f2.checkbox("Veg Only 🟢")
+search = f3.text_input("Search Dish", placeholder="e.g., Paneer, Biryani...")
+
+query_params = {"veg_only": veg_only}
+if category != "All":
+    query_params["category"] = category
+if search:
+    query_params["search"] = search
+
+dishes = api_get("/api/menu", params=query_params) or []
+
+# Dish Cards
+for dish in dishes:
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        badge = f" 🔥 `{dish['deal_badge']}`" if dish.get("deal_badge") else ""
+        veg_dot = "🟢" if dish["is_veg"] else "🔴"
+        c1.subheader(f"{veg_dot} {dish['name']}{badge}")
+        c1.caption(f"Station: {dish['kitchen_station']} | Allergens: {dish.get('allergens') or 'None'}")
+
+        size_opts = ["Full"] + (["Half"] if dish.get("price_half") else [])
+        chosen_size = c2.radio("Portion", size_opts, horizontal=True, key=f"sz_{dish['id']}")
+        chosen_spice = c2.selectbox("Spice", ["Mild", "Medium", "Hot"], index=1, key=f"sp_{dish['id']}")
+        unit_price = dish["price_half"] if chosen_size == "Half" else dish["price_full"]
+
+        c3.metric("Price", f"Rs.{unit_price}")
+        if c3.button("Add +", key=f"add_{dish['id']}"):
+            st.session_state.cart.append({
+                "menu_item_id": dish["id"],
+                "name": dish["name"],
+                "portion_size": chosen_size,
+                "spice_choice": chosen_spice,
+                "quantity": 1,
+                "unit_price": float(unit_price)
+            })
+            st.toast(f"Added {dish['name']} to cart!")
+
+# Sidebar Cart & Order Submission
+with st.sidebar:
+    st.header("🛒 Your Order Cart")
+    if not st.session_state.cart:
+        st.info("Your cart is empty.")
+    else:
+        total = sum(i["unit_price"] * i["quantity"] for i in st.session_state.cart)
+        for idx, item in enumerate(st.session_state.cart):
+            st.write(f"**{item['quantity']}x {item['name']}** ({item['portion_size']}, {item['spice_choice']}) — Rs.{item['unit_price'] * item['quantity']}")
+        st.divider()
+        st.subheader(f"Subtotal: Rs.{total:.2f}")
+        if st.button("🚀 Place Order Now", type="primary", use_container_width=True):
+            payload = {
+                "table_id": table["id"],
+                "items": [
+                    {
+                        "menu_item_id": i["menu_item_id"],
+                        "quantity": i["quantity"],
+                        "portion_size": i["portion_size"],
+                        "spice_choice": i["spice_choice"]
+                    }
+                    for i in st.session_state.cart
+                ]
+            }
+            created = api_post("/api/orders/", payload)
+            if created:
+                st.session_state.cart = []
+                st.success(f"Order #{created['order_id']} placed! Free WiFi: Zaika_Guest / spice2026")
+```
+
+================================================================================
+5. 3-STATION KITCHEN DISPLAY SYSTEM (`3_Kitchen_Display.py`)
+================================================================================
+Splits active tickets across **Tandoor**, **Curry**, and **Drinks** columns with color-coded elapsed cooking timers (`Green` <= 5 min, `Yellow` <= 12 min, `Red` > 12 min).
+
+```python
+import streamlit as st
+from frontend.utils.api_client import api_get, api_patch
+
+st.title("👨‍🍳 Kitchen Display System (KDS)")
+
+if st.button("🔄 Refresh Kitchen Tickets"):
+    st.rerun()
+
+active_items = api_get("/api/kds/active") or []
+
+# NOTE 06: STREAMLIT & PLOTLY FRONTEND UI NOTES
+## Complete Bit-by-Bit Study Guide & UI Examples for Zaika Restaurant Management System
+
+================================================================================
+1. HOW STREAMLIT POWERS ZAIKA'S 4 INTERFACES
+================================================================================
+Streamlit turns pure Python scripts into interactive web applications without requiring HTML, CSS, or JavaScript. Whenever a user clicks a button or selects a filter, Streamlit reruns the Python script from top to bottom.
+
+Zaika's Multi-Page Frontend Architecture:
+- `frontend/app.py`: Entry point. Checks URL query parameters (`?table=T1&token=...`) to launch the Customer Mobile QR Menu automatically, or renders the Staff/Kitchen/Owner Login screen.
+- `frontend/pages/1_Customer_QR_Menu.py`: Mobile dish cards, Veg/Allergen/Search filters, interactive cart, live cooking timer, Free WiFi, 200-pt Mango Lassi progress bar, Spice Quiz, Table vs. Table leaderboard, and Call Waiter alert button.
+- `frontend/pages/2_Staff_Floor_Map.py`: Live T1–T6 floor grid, pending customer order confirmation ("Send to Kitchen"), and Call Waiter alert resolver.
+- `frontend/pages/3_Kitchen_Display.py`: 3-column KDS board (`Tandoor`, `Curry`, `Drinks`) with Green/Yellow/Red urgency timers.
+- `frontend/pages/4_Billing_Checkout.py`: Itemized bill, 2/3/4 or per-item split calculator, tip selector, 5 payment methods, and post-payment 1–5 star review form.
+- `frontend/pages/5_Owner_Dashboard.py`: Live KPI metrics, Plotly sales & top-dish charts, waiter SLA speed, and Menu/Staff management.
+
+================================================================================
+2. SESSION STATE (`st.session_state`) & QR QUERY PARAMS (`st.query_params`)
+================================================================================
+Because Streamlit reruns your script on every click, variables reset unless stored inside `st.session_state`.
+
+```python
+import streamlit as st
+
+st.set_page_config(page_title="Zaika Restaurant", page_icon="🍛", layout="wide")
+
+# Initialize persistent session variables
+if "cart" not in st.session_state:
+    st.session_state.cart = []            # List of selected dish dicts
+if "jwt_token" not in st.session_state:
+    st.session_state.jwt_token = None     # Staff/Kitchen/Owner Bearer token
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None     # 'staff', 'kitchen', or 'owner'
+if "table_info" not in st.session_state:
+    st.session_state.table_info = None    # Verified QR table dict
+
+# Read QR Code URL parameters: e.g., http://localhost:8501/?table=T1&token=tok_t1_99a1
+params = st.query_params
+qr_table = params.get("table")
+qr_token = params.get("token")
+```
+
+================================================================================
+3. REUSABLE FASTAPI CLIENT (`frontend/utils/api_client.py`)
+================================================================================
+Instead of repeating `requests.get()` and `try/except` blocks on every page, wrap all HTTP calls in one clean helper module that automatically attaches the logged-in user's JWT token.
+
+```python
+import os
+import requests
+import streamlit as st
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+def _get_headers() -> dict:
+    token = st.session_state.get("jwt_token")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+def api_get(endpoint: str, params: dict = None):
+    try:
+        res = requests.get(
+            f"{API_BASE_URL}{endpoint}",
+            params=params,
+            headers=_get_headers(),
+            timeout=5
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Connection Error: {err}")
+        return None
+
+def api_post(endpoint: str, payload: dict):
+    try:
+        res = requests.post(
+            f"{API_BASE_URL}{endpoint}",
+            json=payload,
+            headers=_get_headers(),
+            timeout=5
+        )
+        if res.status_code >= 400:
+            detail = res.json().get("detail", "Request failed")
+            st.error(f"Error ({res.status_code}): {detail}")
+            return None
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Connection Error: {err}")
+        return None
+
+def api_patch(endpoint: str, payload: dict = None):
+    try:
+        res = requests.patch(
+            f"{API_BASE_URL}{endpoint}",
+            json=payload or {},
+            headers=_get_headers(),
+            timeout=5
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as err:
+        st.error(f"API Update Error: {err}")
+        return None
+```
+
+================================================================================
+4. CUSTOMER QR MENU, CART & CALL WAITER (`1_Customer_QR_Menu.py`)
+================================================================================
+Combines menu filters, customization selectors (Half/Full, Mild/Medium/Hot), live loyalty progress bar (`st.progress`), and instant Call Waiter buttons.
+
+```python
+import streamlit as st
+from frontend.utils.api_client import api_get, api_post
+
+table = st.session_state.get("table_info")
+if not table:
+    st.warning("Please scan a valid Table QR Code to open the menu.")
+    st.stop()
+
+st.title(f"🍛 Zaika Digital Menu — Table {table['table_number']}")
+
+# Top Bar: Loyalty Progress & Call Waiter
+col_pts, col_waiter = st.columns([2, 1])
+with col_pts:
+    pts = table.get("current_points", 160)
+    st.write(f"**Loyalty Rewards:** {pts} / 200 pts (Free Mango Lassi at 200 pts!)")
+    st.progress(min(pts / 200, 1.0))
+
+with col_waiter:
+    help_type = st.selectbox("Need Assistance?", ["Water", "Napkins", "Bill", "Other Help"])
+    if st.button("🔔 Call Waiter", use_container_width=True):
+        res = api_post("/api/alerts", {"table_id": table["id"], "request_type": help_type})
+        if res:
+            st.toast(f"Waiter alerted for {help_type}!")
+
+st.divider()
+
+# Menu Filters
+f1, f2, f3 = st.columns([2, 1, 2])
+category = f1.selectbox("Category", ["All", "Main Course", "Sides", "Drinks", "Deals"])
+veg_only = f2.checkbox("Veg Only 🟢")
+search = f3.text_input("Search Dish", placeholder="e.g., Paneer, Biryani...")
+
+query_params = {"veg_only": veg_only}
+if category != "All":
+    query_params["category"] = category
+if search:
+    query_params["search"] = search
+
+dishes = api_get("/api/menu", params=query_params) or []
+
+# Dish Cards
+for dish in dishes:
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        badge = f" 🔥 `{dish['deal_badge']}`" if dish.get("deal_badge") else ""
+        veg_dot = "🟢" if dish["is_veg"] else "🔴"
+        c1.subheader(f"{veg_dot} {dish['name']}{badge}")
+        c1.caption(f"Station: {dish['kitchen_station']} | Allergens: {dish.get('allergens') or 'None'}")
+
+        size_opts = ["Full"] + (["Half"] if dish.get("price_half") else [])
+        chosen_size = c2.radio("Portion", size_opts, horizontal=True, key=f"sz_{dish['id']}")
+        chosen_spice = c2.selectbox("Spice", ["Mild", "Medium", "Hot"], index=1, key=f"sp_{dish['id']}")
+        unit_price = dish["price_half"] if chosen_size == "Half" else dish["price_full"]
+
+        c3.metric("Price", f"Rs.{unit_price}")
+        if c3.button("Add +", key=f"add_{dish['id']}"):
+            st.session_state.cart.append({
+                "menu_item_id": dish["id"],
+                "name": dish["name"],
+                "portion_size": chosen_size,
+                "spice_choice": chosen_spice,
+                "quantity": 1,
+                "unit_price": float(unit_price)
+            })
+            st.toast(f"Added {dish['name']} to cart!")
+
+# Sidebar Cart & Order Submission
+with st.sidebar:
+    st.header("🛒 Your Order Cart")
+    if not st.session_state.cart:
+        st.info("Your cart is empty.")
+    else:
+        total = sum(i["unit_price"] * i["quantity"] for i in st.session_state.cart)
+        for idx, item in enumerate(st.session_state.cart):
+            st.write(f"**{item['quantity']}x {item['name']}** ({item['portion_size']}, {item['spice_choice']}) — Rs.{item['unit_price'] * item['quantity']}")
+        st.divider()
+        st.subheader(f"Subtotal: Rs.{total:.2f}")
+        if st.button("🚀 Place Order Now", type="primary", use_container_width=True):
+            payload = {
+                "table_id": table["id"],
+                "items": [
+                    {
+                        "menu_item_id": i["menu_item_id"],
+                        "quantity": i["quantity"],
+                        "portion_size": i["portion_size"],
+                        "spice_choice": i["spice_choice"]
+                    }
+                    for i in st.session_state.cart
+                ]
+            }
+            created = api_post("/api/orders/", payload)
+            if created:
+                st.session_state.cart = []
+                st.success(f"Order #{created['order_id']} placed! Free WiFi: Zaika_Guest / spice2026")
+```
+
+================================================================================
+5. 3-STATION KITCHEN DISPLAY SYSTEM (`3_Kitchen_Display.py`)
+================================================================================
+Splits active tickets across **Tandoor**, **Curry**, and **Drinks** columns with color-coded elapsed cooking timers (`Green` <= 5 min, `Yellow` <= 12 min, `Red` > 12 min).
+
+```python
+import streamlit as st
+from frontend.utils.api_client import api_get, api_patch
+
+st.title("👨‍🍳 Kitchen Display System (KDS)")
+
+if st.button("🔄 Refresh Kitchen Tickets"):
+    st.rerun()
+
+active_items = api_get("/api/kds/active") or []
+
+col_tandoor, col_curry, col_drinks = st.columns(3)
+station_map = {
+"Tandoor": col_tandoor,
+"Curry": col_curry,
+"Drinks": col_drinks
+}
+for station_name, column in station_map.items():
+with column:
+st.header(f"🔥 {station_name}")
+station_tickets = [t for t in active_items if t["kitchen_station"] == station_name]
+if not station_tickets:
+st.info("No pending tickets.")
+for ticket in station_tickets:
+mins = ticket.get("elapsed_mins", 0)
+color_badge = "🟢 NEW" if mins <= 5 else ("🟡 COOKING" if mins <= 12 else "🔴 LATE")
+with st.container(border=True):
+st.markdown(f"### Table {ticket['table_number']} — {color_badge} ({mins}m)")
+st.write(f"{ticket['quantity']}x {ticket['dish_name']} ({ticket['portion_size']} | {ticket['spice_choice']})")
+if ticket["item_status"] == "Pending":
+if st.button("Start Cooking", key=f"start_{ticket['id']}"):
+api_patch(f"/api/kds/items/{ticket['id']}/status", {"item_status": "Cooking"})
+st.rerun()
+elif ticket["item_status"] == "Cooking":
+if st.button("✅ Mark Ready", key=f"ready_{ticket['id']}", type="primary"):
+api_patch(f"/api/kds/items/{ticket['id']}/status", {"item_status": "Ready"})
+st.rerun()
+```
+
+================================================================================
+6. OWNER ANALYTICS WITH PLOTLY CHARTS (5_Owner_Dashboard.py)
+
+Uses st.metric for top-level KPIs and plotly.express for interactive sales and dish-popularity charts.
+```python
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from frontend.utils.api_client import api_get
+st.title("📊 Owner Live Analytics Dashboard")
+summary = api_get("/api/analytics/summary")
+if summary:
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Tables Active", f"{summary['active_tables']}/6")
+k2.metric("Total Orders Today", summary["total_orders_today"])
+k3.metric("Total Sales Today", f"Rs.{summary['total_sales_today']:,.0f}")
+k4.metric("Avg Customer Rating", f"{summary['avg_rating']:.1f} ⭐")
+st.divider()
+c_left, c_right = st.columns(2)
+with c_left:
+st.subheader("Hourly Live Sales")
+sales_df = pd.DataFrame(summary["hourly_sales"])
+fig_sales = px.line(sales_df, x="hour", y="revenue", markers=True, title="Revenue Today (Rs.)")
+st.plotly_chart(fig_sales, use_container_width=True)
+with c_right:
+st.subheader("Top-Selling Dishes")
+dishes_df = pd.DataFrame(summary["top_dishes"])
+fig_dishes = px.bar(dishes_df, x="dish_name", y="total_sold", color="dish_name", title="Units Sold")
+st.plotly_chart(fig_dishes, use_container_width=True)
+```
+
+================================================================================
+7. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 07)
+
+1. Create frontend/utils/api_client.py and frontend/pages/1_Customer_QR_Menu.py.
+2. Start FastAPI (uvicorn backend.main:app --reload) in Terminal 1 and Streamlit (streamlit run frontend/app.py) in Terminal 2.
+3. Open http://localhost:8501/?table=T1&token=tok_t1_99a1, add two dishes to your cart, click Place Order Now, and confirm the order appears in MySQL!
