@@ -1,0 +1,205 @@
+# NOTE 07: PYTEST AUTOMATED TESTING & DOCKER DEPLOYMENT NOTES
+## Complete Bit-by-Bit Study Guide for Testing & Containerizing Zaika
+
+================================================================================
+1. WHY AUTOMATED TESTING & DOCKER ELEVATE YOUR PROJECT
+================================================================================
+Adding automated `pytest` tests and Docker containerization separates a production-ready engineering project from a basic student CRUD demo:
+1. Automated Proof of Validation (`pytest`): Proves your FastAPI endpoints properly accept valid orders (`201 Created`), block invalid negative inputs (`422 Unprocessable Entity`), and enforce Role-Based Access Control (`401`/`403`).
+2. One-Command Deployment (`Docker`): Packages your FastAPI backend, Streamlit frontend, and MySQL database into isolated containers so anyone can run your entire app with `docker-compose up --build`.
+
+Required Packages:
+```bash
+pip install pytest httpx
+```
+
+================================================================================
+2. WRITING AUTOMATED API TESTS (`backend/tests/test_api.py`)
+================================================================================
+FastAPI's built-in `TestClient` lets you simulate HTTP requests directly against your Python app without needing to start a separate live Uvicorn server.
+
+```python
+import pytest
+from fastapi.testclient import TestClient
+from backend.main import app
+
+client = TestClient(app)
+
+# 1. Health Check Test
+def test_api_health_check():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["status"] == "online"
+
+# 2. Public QR Menu Fetch Test
+def test_get_public_menu():
+    response = client.get("/api/menu/")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+# 3. Pydantic Input Validation Test (Negative Quantity Must Fail with 422)
+def test_reject_negative_order_quantity():
+    bad_order_payload = {
+        "table_id": 1,
+        "items": [
+            {
+                "menu_item_id": 1,
+                "quantity": -3,          # Invalid: schema requires ge=1
+                "portion_size": "Full",
+                "spice_choice": "Medium"
+            }
+        ]
+    }
+    response = client.post("/api/orders/", json=bad_order_payload)
+    assert response.status_code == 422
+
+# 4. Pydantic Rating Bounds Test (Rating > 5.0 Must Fail with 422)
+def test_reject_invalid_star_rating():
+    bad_review = {
+        "table_id": 1,
+        "bill_id": 1,
+        "rating": 7.5,               # Invalid: schema requires le=5.0
+        "comment": "Great food!"
+    }
+    response = client.post("/api/reviews", json=bad_review)
+    assert response.status_code == 422
+
+# 5. RBAC Security Test (Unauthenticated Menu Creation Must Fail with 401)
+def test_block_unauthenticated_menu_creation():
+    new_dish = {
+        "name": "Unauthorized Dish",
+        "category": "Main Course",
+        "kitchen_station": "Curry",
+        "price_full": 250.0,
+        "is_veg": True
+    }
+    response = client.post("/api/menu/", json=new_dish)
+    assert response.status_code == 401
+```
+
+Running Your Test Suite:
+```bash
+pytest -v
+```
+Expected Output:
+```text
+backend/tests/test_api.py::test_api_health_check PASSED
+backend/tests/test_api.py::test_get_public_menu PASSED
+backend/tests/test_api.py::test_reject_negative_order_quantity PASSED
+backend/tests/test_api.py::test_reject_invalid_star_rating PASSED
+backend/tests/test_api.py::test_block_unauthenticated_menu_creation PASSED
+======================== 5 passed in 0.62s ========================
+```
+
+================================================================================
+3. BACKEND & FRONTEND DOCKERFILES
+================================================================================
+Each service gets its own lightweight `Dockerfile` based on `python:3.11-slim`.
+
+A. Backend Dockerfile (`backend/Dockerfile`):
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies required for pymysql / cryptography
+RUN apt-get update && apt-get install -y gcc default-libmysqlclient-dev && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+B. Frontend Dockerfile (`frontend/Dockerfile`):
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "frontend/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+================================================================================
+4. MULTI-CONTAINER ORCHESTRATION (`docker-compose.yml`)
+================================================================================
+`docker-compose.yml` connects three containers (`mysql_db`, `zaika_backend`, and `zaika_frontend`) over a shared Docker network, including a `healthcheck` so FastAPI waits until MySQL is completely ready before creating tables.
+
+```yaml
+version: "3.9"
+
+services:
+  mysql_db:
+    image: mysql:8.0
+    container_name: zaika_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: zaika_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zaika_backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zaika_api
+    restart: always
+    depends_on:
+      mysql_db:
+        condition: service_healthy
+    environment:
+      MYSQL_URL: mysql+pymysql://root:rootpassword@mysql_db:3306/zaika_db
+      SQLITE_URL: sqlite:///./audit_logs.db
+      SECRET_KEY: zaika_super_secret_jwt_key_2026
+    ports:
+      - "8000:8000"
+
+  zaika_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: zaika_ui
+    restart: always
+    depends_on:
+      - zaika_backend
+    environment:
+      API_BASE_URL: http://zaika_backend:8000
+    ports:
+      - "8501:8501"
+
+volumes:
+  mysql_data:
+```
+
+Useful Docker Commands Cheat Sheet:
+- Build and launch entire system: `docker-compose up --build -d`
+- Check running container status: `docker-compose ps`
+- View live FastAPI backend logs: `docker-compose logs -f zaika_backend`
+- Stop and clean up containers: `docker-compose down`
+
+================================================================================
+5. FINAL END-TO-END LAUNCH CHECKLIST
+================================================================================
+1. Run `pytest -v` and verify all automated validation & RBAC tests pass.
+2. Push your complete `/backend`, `/frontend`, `docker-compose.yml`, and `README.md` to GitHub.
+3. Verify the full end-to-end user flow:
+   - Scan QR (`?table=T1&token=tok_t1_99a1`) -> Place Order -> Staff clicks "Send to Kitchen" -> Kitchen marks "Cooking" then "Ready" -> Customer sees timer + loyalty points -> Customer triggers Call Waiter -> Staff resolves alert -> Customer splits & pays bill -> Submits 5-star review -> Owner sees live revenue & rating update on Dashboard!
