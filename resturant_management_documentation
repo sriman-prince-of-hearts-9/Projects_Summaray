@@ -1,0 +1,195 @@
+# 🍛 ZAIKA — COMPLETE RESTAURANT MANAGEMENT SYSTEM
+> **🟠 Enterprise Full-Stack Software Requirements, System Architecture & Functional Documentation (v1.0)**  
+> `🐍 Python 3.11` • `⚡ FastAPI` • `🛡️ Pydantic` • `🗄️ MySQL 8.0` • `📝 SQLite` • `🔐 JWT + RBAC` • `🎨 Streamlit` • `🐳 Docker`
+
+---
+
+## 🎯 1. EXECUTIVE SUMMARY & PROJECT VISION
+
+### 🟧 1.1 Project Overview
+**Zaika** is an end-to-end, full-stack restaurant operations and smart dining management platform. It replaces manual paper order pads, static printed menus, and disconnected billing counters with a unified, real-time digital ecosystem connecting **diners**, **floor staff**, **kitchen stations**, and **restaurant owners**.
+
+### 🟩 1.2 Core Problems Solved
+* 🟢 **Zero-Wait QR Ordering:** Eliminates customer wait times for physical menus and order taking via instant table QR scanning—no app downloads or sign-ups required.
+* 🟠 **Kitchen Bottleneck Prevention:** Routes dishes automatically to a station-split **Kitchen Display System (KDS)** with colour-coded urgency timers (`🟢 New`, `🟡 Cooking Long`, `🔴 Late`).
+* 🔴 **Instant Digital Waiter Alerts:** Replaces hand-waving with one-tap **Call Waiter** alerts that flash the requesting table red and measure staff response speed in seconds.
+* 🟣 **Smart Split Billing & Checkout:** Simplifies group dining with automated itemized invoices, 5% GST calculation, tip presets, and equal or per-item bill splitting.
+* 🔵 **Live Owner Business Intelligence:** Equips owners with real-time revenue KPIs, top-selling dish charts, staff SLA metrics, and one-click menu availability toggles.
+
+### 🔄 1.3 End-to-End Dining Lifecycle
+
+| Step | Stage | Actor | System Action & Visual State |
+| :--- | :--- | :--- | :--- |
+| **1️⃣** | **Arrival & QR Scan** | 🧑 Customer | Scans unique table QR code (`T1`–`T6`) -> Table status updates from ⚪ `Empty` to 🔵 `Ordering`. |
+| **2️⃣** | **Browse & Order** | 🧑 Customer | Filters mobile menu, customizes spice/portion, and places order -> Order created as 🟡 `Placed`. |
+| **3️⃣** | **Staff Verification** | 🧑‍💼 Staff | Reviews incoming order on Floor Tablet and taps **Send to Kitchen** -> Status becomes 🟠 `Cooking`. |
+| **4️⃣** | **Kitchen Prep (KDS)** | 👨‍🍳 Kitchen | Tickets route to **Tandoor**, **Curry**, or **Drinks** stations with `🟢/🟡/🔴` timers -> Marked 🟢 `Ready`. |
+| **5️⃣** | **Guest Engagement** | 🧑 Customer | Unlocks **Free WiFi**, tracks **200-pt Mango Lassi** bar, plays **Spice Quiz**, and views **Table Leaderboard**. |
+| **6️⃣** | **Service & Alerts** | 🧑 / 🧑‍💼 | Guest taps **Call Waiter** (`🔴 Needs Help`) -> Staff resolves alert (`Waiter Reached in 8 sec`). |
+| **7️⃣** | **Split Billing & Tip** | 🧑 / 🧑‍💼 | Generates itemized bill + 5% GST + Tip -> Splits equally or by item -> Pays via 5 payment methods. |
+| **8️⃣** | **Review & Reset** | 🧑 System | Guest submits `1.0–5.0 ⭐` rating -> Orders close and table resets automatically to ⚪ `Empty`. |
+
+---
+
+## 🏗️ 2. SYSTEM ARCHITECTURE & TECHNOLOGY STACK
+
+### 🟦 2.1 Three-Tier Full-Stack Architecture
+
+| Architecture Layer | Technologies Used | Core Responsibilities |
+| :--- | :--- | :--- |
+| 🎨 **Presentation Layer (Frontend)** | `Streamlit`, `Plotly`, `Requests`, `QRCode` | Delivers 4 role-specific interfaces (Customer QR Menu, Staff Tablet, KDS Board, Owner Dashboard) with live charts and session state. |
+| ⚡ **Application Layer (Backend)** | `FastAPI`, `Uvicorn`, `Pydantic` | Exposes 24 REST API endpoints, validates all incoming JSON payloads, enforces business rules, and serves Swagger UI at `/docs`. |
+| 🔐 **Security & Auth Layer** | `JWT (python-jose)`, `Passlib (bcrypt)` | Secures Staff, Kitchen, and Owner endpoints via 8-hour Bearer tokens while validating token-free customer QR links. |
+| 🔗 **ORM Mapping Layer** | `SQLAlchemy ORM` | Translates Python domain classes into parameterized SQL queries and manages atomic multi-table database transactions. |
+| 🗄️ **Primary Database** | `MySQL 8.0+ (pymysql)` | Stores all **10 core relational tables** with strict Primary/Foreign Key constraints, ENUM states, and 3NF normalization. |
+| 📝 **Secondary Audit Store** | `SQLite (audit_logs.db)` | Captures rapid operational audit events (`USER_LOGIN`, `ORDER_PLACED`, `BILL_PAID`) locally without adding load to MySQL. |
+| 🐳 **Testing & DevOps** | `Pytest`, `TestClient`, `Docker Compose` | Runs automated validation/security tests and orchestrates MySQL, FastAPI, and Streamlit in isolated containers. |
+
+### 🔀 2.2 End-to-End Data Journey
+> `📱 Streamlit UI Click` ➔ `📦 JSON Payload (Requests + JWT)` ➔ `⚡ FastAPI Router & RBAC Guard` ➔ `🛡️ Pydantic Validation` ➔ `🔗 SQLAlchemy ORM` ➔ `🗄️ MySQL (Core Data) + 📝 SQLite (Audit Log)` ➔ `✅ JSON Response` ➔ `🔄 Live UI Refresh`
+
+---
+
+## 🔐 3. USER ROLES & ACCESS CONTROL MATRIX
+
+| Role | Badge | Login Method | Permitted Modules & Actions | Restricted From |
+| :--- | :--- | :--- | :--- | :--- |
+| **Customer** | 🟢 `PUBLIC QR` | **No Login** (Table QR Token) | Browse/search menu, cart, order tracking, cooking timer, WiFi, rewards, Spice Quiz, leaderboard, Call Waiter, split/pay bill, 1–5⭐ review. | Staff Floor Map, KDS Board, Owner Analytics, Menu/Price edits. |
+| **Floor Staff** | 🔵 `STAFF JWT` | Email + Password (`JWT`) | Live `T1`–`T6` Floor Map, confirm orders (*Send to Kitchen*), mark orders *Served*, resolve Call Waiter alerts, generate/settle bills. | Adding/deleting dishes, changing prices, managing user accounts. |
+| **Kitchen Staff** | 🟠 `KITCHEN JWT` | Email + Password (`JWT`) | Access restricted strictly to the **3-Station KDS Board** (`Tandoor`, `Curry`, `Drinks`) to advance items `Pending` ➔ `Cooking` ➔ `Ready`. | Floor Map, billing/payments, guest engagement, Owner reports. |
+| **Owner / Admin** | 🟣 `OWNER JWT` | Email + Password (`JWT`) | **Full Unrestricted Access:** Live KPIs, Plotly sales charts, waiter SLA leaderboard, Menu CRUD + On/Off toggles, Staff management, Audit logs. | *No restrictions.* |
+
+---
+
+## 🧩 4. DETAILED FUNCTIONAL SPECIFICATIONS (10 MODULES)
+
+### 🟧 Module 1: Table & Floor Management
+* **Live 6-Table Grid:** Visual floor plan covering **`T1`, `T2`, `T3`, `T4`, `T5`, and `T6`** with an active occupancy counter (`6/6 Tables Active`).
+* **5 Colour-Coded Table Statuses:**
+  * ⚪ **`Empty`** — Clean and ready for new guests.
+  * 🔵 **`Ordering`** — Customer scanned QR code and is browsing/ordering.
+  * 🟠 **`Eating`** — Order sent to kitchen or served at table.
+  * 🟣 **`Bill Requested`** — Guest initiated checkout and awaits payment.
+  * 🔴 **`Needs Help`** — Active Call Waiter alert triggered (flashes red on staff map).
+* **QR Security Tokens:** Each table URL embeds a unique secret token (`?table=T1&token=tok_t1_99a1`) to prevent prank orders from outside the restaurant.
+
+### 🟩 Module 2: Contactless Customer QR Menu & Ordering
+* **Instant Mobile Menu:** Opens immediately upon scanning QR—zero app installation or registration.
+* **4 Structured Categories:** `Main Course` • `Sides` • `Drinks` • `Deals`.
+* **Rich Dish Cards:** Displays Dish Name, Photo, `Half` & `Full` prices, `🟢 Veg` / `🔴 Non-Veg` badges, Spice Level (`Mild`, `Medium`, `Hot`), Allergen tags (`Dairy`, `Nuts`, `Gluten`), and promotional badges (`🔥 Deal of the Day`).
+* **Smart Filtering & Cart:** Filter by category, Veg-only toggle, allergen exclusion, or live keyword search; add customized items to cart with `+/-` quantity controls.
+
+### 🔵 Module 3: Two-Step Order Flow & Live Tracking
+* **Two-Step Dispatch:** Customer places order (`🟡 Placed`) ➔ Appears on Staff Tablet ➔ Staff clicks **Send to Kitchen** (`🟠 Confirmed` / `🟠 Cooking`).
+* **Visual Status Bar:** Real-time progress steps: `Placed` ➔ `Confirmed` ➔ `Cooking` ➔ `Ready` ➔ `Served`.
+* **Live Cooking Countdown:** Dynamically calculates remaining minutes and seconds from `estimated_ready_at` (e.g., *"⏱️ Your food is cooking — 11:30 min left"*).
+
+### 🔴 Module 4: Kitchen Display System (KDS)
+* **3 Specialized Station Columns:** Automatically splits order items into **🔥 Tandoor**, **🍛 Curry**, and **🥤 Drinks**.
+* **Colour-Coded Urgency Timers:**
+  * 🟢 **Green (`0–5 mins`):** Freshly received ticket.
+  * 🟡 **Yellow (`5–12 mins`):** Cooking for an extended duration.
+  * 🔴 **Red (`> 12 mins`):** Late / overdue priority alert.
+* **Station Workflow:** Kitchen staff tap **Start Cooking** ➔ **Mark Ready**. Cards automatically clear from the KDS board once floor staff mark the order **Served**.
+
+### 🟣 Module 5: Guest Engagement Suite (While Waiting)
+* 📶 **Free WiFi Unlock Card:** Automatically reveals WiFi Network Name and Password immediately after placing an order.
+* 🎁 **Loyalty Rewards Bar:** Tracks guest points (`160 / 200 pts`) with a live progress bar toward unlocking **`200 points = Free Mango Lassi`**.
+* 🌶️ **Interactive Spice Quiz:** Culinary trivia mini-game awarding bonus points for correct answers.
+* 🏆 **Table vs. Table Challenge:** Live points leaderboard (`T5 vs T2 Live Leaderboard`) gamifying friendly competition between tables.
+
+### 🚨 Module 6: Call Waiter Alert System
+* **One-Tap Assistance:** Customer selects **`💧 Water`**, **`🧻 Napkins`**, **`🧾 Bill`**, or **`🙋 Other Help`**.
+* **Instant Staff Popup & SLA Timer:** Highlights the table red on the Staff Floor Map (`🔴 T5 Needs Help — Water`). Tapping **Mark Resolved** calculates exact response speed in seconds (e.g., *"⚡ Waiter Reached in 8 sec"*).
+
+### 💳 Module 7: Billing, Split Calculator & Payment Settlement
+* **Consolidated Itemized Invoice:** Combines all active table orders with **Subtotal**, **5% GST**, **Tip**, and **Grand Total**.
+* **Flexible Bill Splitting:** Choose **Single Payment**, **Equal Split (`2, 3, or 4 people`)**, or **Split by Individual Item**.
+* **Tip Presets & 5 Payment Channels:** Tip `5%`, `10%`, `15%`, or Custom ₹; pay via `💵 Cash`, `💳 Card`, `🏦 Bank Transfer`, `📱 Google Pay`, or `🍎 Apple Pay`.
+• Automated Table Reset: Marks bill Paid, closes all table orders, displays digital receipt, and resets table status to ⚪ Empty.
+
+⭐ Module 8: Post-Payment Feedback & Review
+
+• Prompts diners immediately after checkout ("How was your experience?") with a 1.0 to 5.0 ⭐ Star Rating and comment box that updates the Owner Dashboard live.
+
+📊 Module 9: Owner Dashboard & Administrative Controls
+
+• Live KPI Metrics: Active Tables (6/6), Total Orders Today, Total Revenue Today (₹), and Average Rating (⭐).
+• Interactive Plotly Charts: Hourly Live Sales trend line and Top-Selling Dishes bar chart.
+• Staff SLA & Management: Waiter response-speed leaderboard, Menu CRUD manager (with instant On/Off availability switches), and Staff/Kitchen/Owner user role controls.
+
+📝 Module 10: Operational Audit Logging
+
+• Automatically writes tamper-evident event trails (USER_LOGIN, ORDER_PLACED, ORDER_CONFIRMED, KDS_READY, ALERT_RESOLVED, BILL_PAID) to the local SQLite database.
+
+🗄️ 5. RELATIONAL DATABASE DESIGN (10 MYSQL + 1 SQLITE TABLE)
+
+
+🟦 5.1 Primary MySQL Schema (zaika_db — 3NF Normalized)
+
+
+#	Table Name	Primary & Foreign Keys	Key Columns & Constraints	Purpose
+1	users	PK: id	full_name, email (UNIQUE), password_hash, role (ENUM), is_active	Staff, Kitchen, and Owner login accounts.
+2	restaurant_tables	PK: id	table_number (T1–T6), capacity, qr_token (UNIQUE), status (ENUM), current_points	Live floor map state, QR tokens & table challenge points.
+3	menu_items	PK: id	name, category (ENUM), kitchen_station (ENUM), price_half, price_full, is_veg, allergens, deal_badge, prep_time_mins, is_available	Dishes, dietary metadata, prep timers & KDS station routing.
+4	orders	PK: id
+FK: table_id, confirmed_by	status (Placed..Closed), placed_at, cooking_started_at, estimated_ready_at	Customer order batches & live countdown timestamps.
+5	order_items	PK: id
+FK: order_id (CASCADE), menu_item_id	quantity (>=1), portion_size (Half/Full), spice_choice, unit_price, item_status	Line items linking orders to dishes with price snapshot.
+6	bills	PK: id
+FK: table_id	subtotal, gst_amount, tip_amount, grand_total, split_type, bill_status	Consolidated table invoices, GST, tips & split modes.
+7	payments	PK: id
+FK: bill_id	amount_paid, payment_method (5 options), customer_email, paid_at	Full or multi-transaction split payment records.
+8	call_waiter_requests	PK: id
+FK: table_id, resolved_by	request_type (4 options), status, created_at, resolved_at, response_seconds	Live waiter assistance alerts & SLA response speed.
+9	reviews	PK: id
+FK: table_id, bill_id	rating (1.0–5.0), comment, created_at	Post-payment customer star ratings & feedback.
+10	rewards	PK: id
+FK: table_id	guest_session_id (UNIQUE), points_balance, quiz_score, free_item_unlocked	Loyalty points (200 pts = Free Mango Lassi) & quiz scores.
+
+
+🟨 5.2 Secondary SQLite Audit Table (audit_logs.db)
+
+
+#	Table Name	Key Columns	Purpose
+11	activity_logs	id (PK), actor_role, actor_id, action, details, timestamp	Lightweight local operational audit log.
+
+
+🌐 6. REST API ENDPOINT CONTRACT (24 ENDPOINTS)
+
+
+Domain	Method & Endpoint	Access	Functional Description
+Auth	POST /api/auth/login	🟢 Public	Authenticates Staff/Kitchen/Owner and issues JWT Bearer token.
+Auth	POST /api/auth/register	🟣 Owner	Creates new Staff, Kitchen, or Owner accounts.
+Auth	GET /api/auth/users	🟣 Owner	Lists all staff accounts and active statuses.
+Auth	PATCH /api/auth/users/{id}/toggle	🟣 Owner	Activates or deactivates a user account.
+Tables	GET /api/tables	🔵 Staff / 🟣 Owner	Fetches live statuses and points for tables T1–T6.
+Tables	GET /api/tables/verify-qr	🟢 Public	Validates table and token query parameters from QR scan.
+Tables	PATCH /api/tables/{id}/status	🔵 Staff / 🟣 Owner	Manually updates table floor status.
+Menu	GET /api/menu	🟢 Public	Lists available menu items with category, veg, allergen & search filters.
+Menu	POST /api/menu	🟣 Owner	Adds a new dish to the menu.
+Menu	PATCH /api/menu/{id}	🟣 Owner	Edits dish pricing, station, deal badge, or availability toggle.
+Menu	DELETE /api/menu/{id}	🟣 Owner	Removes a dish from the menu.
+Orders	POST /api/orders	🟢 Public	Places customer QR order (Placed), sets table Ordering, awards points.
+Orders	GET /api/orders/table/{id}	🟢 Public	Fetches active orders & live countdown seconds for a table.
+Orders	PATCH /api/orders/{id}/confirm	🔵 Staff / 🟣 Owner	Confirms order (Send to Kitchen) and sets estimated_ready_at.
+KDS	GET /api/kds/active	🟠 Kitchen / 🟣 Owner	Returns active tickets grouped by Tandoor, Curry, and Drinks.
+KDS	PATCH /api/kds/items/{id}/status	🟠 Kitchen / 🟣 Owner	Advances item status (Cooking ➔ Ready).
+Orders	PATCH /api/orders/{id}/served	🔵 Staff / 🟣 Owner	Marks order Served and clears it from the KDS board.
+Alerts	POST /api/alerts	🟢 Public	Triggers Call Waiter alert and highlights table Needs Help.
+Alerts	GET /api/alerts/pending	🔵 Staff / 🟣 Owner	Fetches all unresolved Call Waiter alerts.
+Alerts	PATCH /api/alerts/{id}/resolve	🔵 Staff / 🟣 Owner	Resolves alert and records response_seconds SLA metric.
+Billing	POST /api/bills/generate/{id}	🟢 Public / 🔵 Staff	Computes subtotal, 5% GST, tip, and split breakdown.
+Billing	POST /api/payments	🟢 Public / 🔵 Staff	Records payment; closes orders & resets table to Empty when paid.
+Reviews	POST /api/reviews	🟢 Public	Saves post-payment 1.0–5.0 ⭐ rating and comment.
+Analytics	GET /api/engagement/{id} & POST /api/engagement/quiz-submit & GET /api/analytics/summary	🟢 Public / 🟣 Owner	Serves WiFi/Rewards/Leaderboard, awards quiz points, and returns Owner KPIs, Plotly sales data & waiter SLA metrics.
+
+
+📂 7. PROJECT REPOSITORY STRUCTURE
+
+text zaika-restaurant-system/ ├── 🐳 docker-compose.yml              # Orchestrates MySQL, FastAPI & Streamlit containers ├── 🔒 .env.example                    # Environment template (DB URLs & JWT Secret) ├── 📘 README.md                       # Setup instructions & demo credentials ├── ⚙️ backend/ │   ├── 🐳 Dockerfile │   ├── 📦 requirements.txt │   ├── 🚀 main.py                     # FastAPI app initialization, CORS & routers │   ├── 🗄️ database.py                 # MySQL + SQLite engines & session generators │   ├── 📐 models.py                   # 10 MySQL + 1 SQLite SQLAlchemy ORM models │   ├── 🛡️ schemas.py                  # Pydantic validation & serialization schemas │   ├── 🔐 auth.py                     # bcrypt hashing, JWT tokens & RBAC guards │   ├── 🌱 seed_data.py                # Pre-loads T1–T6, sample dishes & demo logins │   ├── 📁 routers/                    # 7 modular REST API route controllers │   └── 🧪 tests/test_api.py           # Pytest validation & RBAC security suite └── 🎨 frontend/ ├── 🐳 Dockerfile ├── 📦 requirements.txt ├── 🧭 app.py                      # Entry router (QR Customer vs. Staff Login) ├── 🔌 utils/api_client.py         # Centralized HTTP client with JWT headers └── 📱 pages/ ├── 1_Customer_QR_Menu.py      # Mobile menu, cart, timer, WiFi, quiz & alerts ├── 2_Staff_Floor_Map.py       # Live T1–T6 floor grid & alert resolver ├── 3_Kitchen_Display.py       # 3-station KDS board with urgency timers ├── 4_Billing_Checkout.py      # Split bill calculator, tip & payment checkout └── 5_Owner_Dashboard.py       # Live KPIs, Plotly charts, Menu & Staff Admin 
+
+✅ 8. QUALITY ASSURANCE & DEPLOYMENT PLAN
+
+• 🧪 Automated Validation Testing (Pytest): Verifies 200/201 happy paths, rejects negative quantities and out-of-range star ratings with 422 Unprocessable Entity, and blocks unauthorized access with 401/403 errors.
+• 🐳 One-Command Containerized Launch (Docker Compose): Runs mysql_db (with healthcheck), zaika_backend (port 8000), and zaika_frontend (port 8501) seamlessly via docker-compose up --build -d.
