@@ -1,0 +1,249 @@
+COMPLETE FUNCTIONAL MODULES (ALL 10 MODULES)
+================================================================================
+MODULE 1: TABLE & FLOOR MANAGEMENT
+- Live visual floor plan covering 6 tables: T1, T2, T3, T4, T5, and T6.
+- Five real-time table statuses with color indicators:
+  1. Empty (Grey/Green — ready for guests)
+  2. Ordering (Blue — customer browsing QR menu)
+  3. Eating (Yellow/Orange — order sent/served)
+  4. Bill Requested (Purple — awaiting payment)
+  5. Needs Help (Flashing Red — active Call Waiter alert)
+- Each table has a unique QR code URL embedding table number and security token (e.g., ?table=T1&token=abc123).
+- Active Tables Counter displayed live on Staff and Owner screens (e.g., "6/6 Tables Active").
+
+MODULE 2: CUSTOMER QR MENU & ORDERING (NO LOGIN)
+- Scanning the table QR opens the mobile-friendly menu immediately—zero registration, login, or app download required.
+- Four menu categories: Main Course, Sides, Drinks, and Deals.
+- Dish cards display: Dish Name, Photo, Price (Half & Full), Veg/Non-Veg indicator, Spice Level selector (Mild / Medium / Hot), Allergen tags (Dairy, Nuts, Gluten), and promotional Deal Badges ("Deal of the Day").
+- Interactive menu filters: Veg-only toggle, category tabs, allergen exclusion, and live keyword search.
+- Interactive shopping cart with item customization, quantity +/- buttons, and live subtotal preview.
+
+MODULE 3: TWO-STEP ORDER FLOW & LIVE TRACKING
+- Step 1: Customer places order from phone -> Status becomes "Placed".
+- Step 2: Order appears immediately on Staff Tablet -> Staff reviews and clicks "Send to Kitchen" -> Status becomes "Confirmed" -> "Cooking".
+- Customer sees live order status progression: Placed -> Confirmed -> Cooking -> Ready -> Served.
+- Live Cooking Countdown Timer shown to customer (e.g., "Your food is cooking — 11:30 min left") calculated from estimated_ready_at.
+- Full Order History accessible per table session.
+
+MODULE 4: KITCHEN DISPLAY SYSTEM (KDS)
+- Screen divided into three specialized kitchen stations: Tandoor, Curry, and Drinks.
+- Incoming order items automatically route to their assigned station column.
+- Each KDS ticket card displays: Table Number, Dish Name, Portion Size, Spice Level, Quantity, and elapsed cooking timer.
+- Color-coded urgency timers:
+  - Green: New order (0–5 mins)
+  - Yellow: Cooking long (5–12 mins)
+  - Red: Late / overdue (>12 mins)
+- Kitchen staff actions: "Start Cooking" -> "Mark Ready". Once marked "Served" by floor staff, cards automatically clear from the KDS board.
+
+MODULE 5: GUEST ENGAGEMENT (WHILE WAITING)
+- Free WiFi Card: Automatically unlocks and displays the restaurant WiFi Network Name and Password right after placing an order.
+- Loyalty Rewards Tracker: Displays guest points balance (e.g., 160 points) with a visual progress bar toward the 200-point milestone ("200 points = Free Mango Lassi").
+- Spice Quiz Game: Interactive trivia mini-game about Indian spices and dishes that awards bonus loyalty points.
+- Table vs. Table Live Challenge: Real-time points leaderboard comparing active tables (e.g., "T5 vs T2 Live Leaderboard") to encourage group engagement.
+
+MODULE 6: CALL WAITER ALERT SYSTEM
+- One-tap "Call Waiter" button on the customer's phone with 4 quick options: Water, Napkins, Bill, or Other Help.
+- Triggers an instant popup/sound alert on the Staff Tablet and turns that table Red on the live floor map (e.g., "T5 Needs Help — Water").
+- Staff taps "Mark Resolved" upon reaching the table; system calculates exact response time in seconds (e.g., "Waiter Reached in 8 sec") for performance analytics.
+
+MODULE 7: BILLING, SPLIT BILL & PAYMENT
+- Automatic consolidated bill generation per table combining all order batches.
+- Itemized breakdown showing Dish Name, Size, Quantity, Unit Price, Line Total, Subtotal, 5% GST, Tip, and Grand Total.
+- Flexible Bill Splitting options:
+  - No Split (Single payment)
+  - Equal Split by 2, 3, or 4 people
+  - Split by Individual Item
+- Tip selector: 5%, 10%, 15%, or Custom Rupee amount.
+- Five supported payment methods: Cash, Card, Bank Transfer, Google Pay, and Apple Pay.
+- Post-payment workflow: Sends/displays digital receipt, marks bill "Paid", closes all table orders, and resets table status to "Empty".
+
+MODULE 8: POST-PAYMENT FEEDBACK & REVIEW
+- Immediately after payment confirmation, customer sees a feedback prompt: "How was your experience?"
+- Includes a 1.0 to 5.0 Star Rating selector and an optional comment box.
+- Submitted ratings save directly to the database and update the Owner Dashboard's live satisfaction score.
+
+MODULE 9: OWNER DASHBOARD & ADMIN CONTROLS
+- Live KPI Cards: Active Tables (e.g., 6/6), Total Orders Today (e.g., 46), Total Revenue Today (e.g., ₹48.6k), Average Rating (e.g., 4.9/5.0).
+- Visual Analytics (Plotly): Hourly/Daily Live Sales Chart and Top-Selling Dishes bar chart.
+- Staff Performance Tracker: Average waiter response time (in seconds) per staff member for Call Waiter alerts.
+- Menu Management: Add new dishes, edit prices/details, toggle dish availability On/Off, or delete items.
+- User & Role Management: Create, activate, or deactivate accounts for Staff, Kitchen, and Owner roles.
+
+MODULE 10: ROLES & ACCESS CONTROL
+- Customer: No login required (authenticated solely via table QR token). Accesses QR Menu, Cart, Order Tracker, Guest Games/Rewards, Call Waiter, Billing, and Feedback.
+- Staff / Waiter: Login required. Accesses Live Floor Map, Order Confirmation ("Send to Kitchen"), Call Waiter Alerts, and Table Billing.
+- Kitchen Staff: Login required. Accesses only the 3-Station Kitchen Display System (KDS).
+Use code with caution.
+• Owner / Admin: Login required. Full access to Owner Analytics Dashboard, Menu Management, Staff Management, Reports, and Audit Logs.
+
+================================================================================
+4. RELATIONAL DATABASE DESIGN (10 MYSQL TABLES + 1 SQLITE TABLE)
+
+TABLE 1: users (MySQL) — Staff, Kitchen, and Owner accounts
+• id: INT, Primary Key, Auto Increment
+• full_name: VARCHAR(100), Not Null
+• email: VARCHAR(120), Unique, Not Null
+• password_hash: VARCHAR(255), Not Null
+• role: ENUM('staff', 'kitchen', 'owner'), Not Null
+• is_active: BOOLEAN, Default TRUE
+• created_at: DATETIME, Default Current Timestamp
+TABLE 2: restaurant_tables (MySQL) — Floor map & QR tokens (T1–T6)
+• id: INT, Primary Key, Auto Increment
+• table_number: VARCHAR(10), Unique, Not Null (T1 to T6)
+• capacity: INT, Not Null
+• qr_token: VARCHAR(64), Unique, Not Null
+• status: ENUM('Empty', 'Ordering', 'Eating', 'Bill Requested', 'Needs Help'), Default 'Empty'
+• current_points: INT, Default 0
+TABLE 3: menu_items (MySQL) — Dishes, pricing, allergens, spice & KDS station
+• id: INT, Primary Key, Auto Increment
+• name: VARCHAR(100), Not Null
+• category: ENUM('Main Course', 'Sides', 'Drinks', 'Deals'), Not Null
+• kitchen_station: ENUM('Tandoor', 'Curry', 'Drinks'), Not Null
+• price_half: DECIMAL(10,2), Nullable
+• price_full: DECIMAL(10,2), Not Null
+• is_veg: BOOLEAN, Default TRUE
+• spice_levels: VARCHAR(50), Default 'Mild,Medium,Hot'
+• allergens: VARCHAR(100), Nullable (e.g., 'Dairy,Nuts,Gluten')
+• deal_badge: VARCHAR(50), Nullable (e.g., 'Deal of the Day')
+• prep_time_mins: INT, Default 15
+• image_url: VARCHAR(255), Nullable
+• is_available: BOOLEAN, Default TRUE
+TABLE 4: orders (MySQL) — Order batches & cooking timers
+• id: INT, Primary Key, Auto Increment
+• table_id: INT, Foreign Key -> restaurant_tables.id, Not Null
+• confirmed_by: INT, Foreign Key -> users.id, Nullable
+• status: ENUM('Placed', 'Confirmed', 'Cooking', 'Ready', 'Served', 'Closed'), Default 'Placed'
+• placed_at: DATETIME, Default Current Timestamp
+• cooking_started_at: DATETIME, Nullable
+• estimated_ready_at: DATETIME, Nullable
+TABLE 5: order_items (MySQL) — Individual items within each order
+• id: INT, Primary Key, Auto Increment
+• order_id: INT, Foreign Key -> orders.id (ON DELETE CASCADE), Not Null
+• menu_item_id: INT, Foreign Key -> menu_items.id, Not Null
+• quantity: INT, Not Null
+• portion_size: ENUM('Half', 'Full'), Default 'Full'
+• spice_choice: ENUM('Mild', 'Medium', 'Hot'), Default 'Medium'
+• unit_price: DECIMAL(10,2), Not Null
+• item_status: ENUM('Pending', 'Cooking', 'Ready'), Default 'Pending'
+TABLE 6: bills (MySQL) — Table invoices, GST, tips & split mode
+• id: INT, Primary Key, Auto Increment
+• table_id: INT, Foreign Key -> restaurant_tables.id, Not Null
+• subtotal: DECIMAL(10,2), Not Null
+• gst_amount: DECIMAL(10,2), Not Null
+• tip_amount: DECIMAL(10,2), Default 0.00
+• grand_total: DECIMAL(10,2), Not Null
+• split_type: ENUM('None', 'Equal_2', 'Equal_3', 'Equal_4', 'By_Item'), Default 'None'
+• bill_status: ENUM('Unpaid', 'Partially_Paid', 'Paid'), Default 'Unpaid'
+• created_at: DATETIME, Default Current Timestamp
+TABLE 7: payments (MySQL) — Individual & split payment transactions
+• id: INT, Primary Key, Auto Increment
+• bill_id: INT, Foreign Key -> bills.id, Not Null
+• amount_paid: DECIMAL(10,2), Not Null
+• payment_method: ENUM('Cash', 'Card', 'Bank Transfer', 'Google Pay', 'Apple Pay'), Not Null
+• customer_email: VARCHAR(120), Nullable
+• paid_at: DATETIME, Default Current Timestamp
+TABLE 8: call_waiter_requests (MySQL) — Live alerts & staff response SLA
+• id: INT, Primary Key, Auto Increment
+• table_id: INT, Foreign Key -> restaurant_tables.id, Not Null
+• request_type: ENUM('Water', 'Napkins', 'Bill', 'Other Help'), Not Null
+• status: ENUM('Pending', 'Resolved'), Default 'Pending'
+• resolved_by: INT, Foreign Key -> users.id, Nullable
+• created_at: DATETIME, Default Current Timestamp
+• resolved_at: DATETIME, Nullable
+• response_seconds: INT, Nullable
+TABLE 9: reviews (MySQL) — Customer ratings & feedback
+• id: INT, Primary Key, Auto Increment
+• table_id: INT, Foreign Key -> restaurant_tables.id, Not Null
+• bill_id: INT, Foreign Key -> bills.id, Not Null
+• rating: DECIMAL(2,1), Not Null (1.0 to 5.0)
+• comment: TEXT, Nullable
+• created_at: DATETIME, Default Current Timestamp
+TABLE 10: rewards (MySQL) — Guest loyalty points & Spice Quiz scores
+• id: INT, Primary Key, Auto Increment
+• guest_session_id: VARCHAR(64), Unique, Not Null
+• table_id: INT, Foreign Key -> restaurant_tables.id, Not Null
+• points_balance: INT, Default 0
+• quiz_score: INT, Default 0
+• free_item_unlocked: BOOLEAN, Default FALSE
+• updated_at: DATETIME, Auto-Update Current Timestamp
+TABLE 11: activity_logs (SQLite — audit_logs.db) — Fast local audit trail
+• id: INTEGER, Primary Key, Autoincrement
+• actor_role: TEXT, Not Null ('customer', 'staff', 'kitchen', 'owner')
+• actor_id: INTEGER, Nullable
+• action: TEXT, Not Null (e.g., 'ORDER_PLACED', 'KDS_READY', 'BILL_PAID')
+• details: TEXT, Nullable
+• timestamp: DATETIME, Default Current Timestamp
+
+================================================================================
+5. COMPLETE FASTAPI ENDPOINT CONTRACT
+
+Authentication:
+• POST /api/auth/login -> Authenticate Staff/Kitchen/Owner and return JWT token.
+• POST /api/auth/register -> [Owner] Create new Staff, Kitchen, or Owner account.
+Tables & Floor Map:
+• GET /api/tables -> Fetch live status & points for tables T1–T6.
+• GET /api/tables/verify-qr -> [Public] Validate table_number and qr_token from URL.
+• PATCH /api/tables/{table_id}/status -> [Staff] Manually update table floor status.
+Menu Management:
+• GET /api/menu -> [Public] List menu items with filters (category, veg, allergen, search).
+• POST /api/menu -> [Owner] Add a new dish to the menu.
+• PATCH /api/menu/{item_id} -> [Owner] Edit dish price, details, or toggle availability.
+• DELETE /api/menu/{item_id} -> [Owner] Remove a dish from the menu.
+Order Lifecycle & KDS:
+• POST /api/orders -> [Public] Customer places a new order from QR menu.
+• GET /api/orders/table/{table_id} -> [Public] Fetch live order status & countdown timer for table.
+• PATCH /api/orders/{order_id}/confirm -> [Staff] Confirm customer order and send to KDS.
+• GET /api/kds/active -> [Kitchen] Fetch active items grouped by Tandoor, Curry, Drinks.
+• PATCH /api/kds/items/{item_id}/status -> [Kitchen] Update item status (Cooking -> Ready).
+• PATCH /api/orders/{order_id}/served -> [Staff] Mark ready order as Served (clears from KDS).
+Call Waiter Alerts:
+• POST /api/alerts -> [Public] Customer triggers Call Waiter (Water, Napkins, Bill, Help).
+• GET /api/alerts/pending -> [Staff] Fetch active unacknowledged table alerts.
+• PATCH /api/alerts/{alert_id}/resolve -> [Staff] Resolve alert and record response_seconds.
+Billing, Payments & Reviews:
+• POST /api/bills/generate/{table_id} -> [Public/Staff] Generate itemized bill with GST & tip.
+• POST /api/payments -> [Public/Staff] Record full or split payment; resets table when paid.
+• POST /api/reviews -> [Public] Submit post-payment 1–5 star rating and comment.
+Guest Engagement & Owner Analytics:
+• GET /api/engagement/{table_id} -> [Public] Fetch WiFi credentials, reward points & Table Leaderboard.
+• POST /api/engagement/quiz-submit -> [Public] Award points for Spice Quiz answers.
+• GET /api/analytics/summary -> [Owner] Fetch KPIs, live sales chart data, top dishes & waiter SLA metrics.
+
+================================================================================
+6. PROJECT FOLDER & FILE STRUCTURE
+
+zaika-restaurant-system/
+├── docker-compose.yml
+├── .env
+├── README.md
+├── backend/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── main.py                  # FastAPI app entry point, CORS & router registration
+│   ├── database.py              # MySQL & SQLite engines + SessionLocal
+│   ├── models.py                # 10 MySQL + 1 SQLite SQLAlchemy ORM models
+│   ├── schemas.py               # Pydantic request/response validation schemas
+│   ├── auth.py                  # Password hashing, JWT creation & role dependencies
+│   ├── seed_data.py             # Pre-populates T1–T6, sample menu & default Owner account
+│   ├── routers/
+│   │   ├── auth_router.py       # Login & user management endpoints
+│   │   ├── tables_router.py     # Floor map & QR verification endpoints
+│   │   ├── menu_router.py       # Menu CRUD & filtering endpoints
+│   │   ├── orders_router.py     # Customer order flow & KDS station endpoints
+│   │   ├── alerts_router.py     # Call Waiter alert & SLA response endpoints
+│   │   ├── billing_router.py    # Bill calculation, split payments & reviews
+│   │   └── analytics_router.py  # Owner KPIs, sales charts & guest engagement
+│   └── tests/
+│       └── test_api.py          # Pytest automated validation & endpoint tests
+└── frontend/
+├── Dockerfile
+├── requirements.txt
+├── app.py                   # Main entry point (routes QR customers or Staff Login)
+├── utils/
+│   └── api_client.py        # Helper wrapper around Python requests + JWT headers
+└── pages/
+├── 1_Customer_QR_Menu.py    # Mobile menu, cart, timer, WiFi, quiz & Call Waiter
+├── 2_Staff_Floor_Map.py     # Live T1–T6 map, order confirmation & alert resolver
+├── 3_Kitchen_Display.py     # 3-station KDS board with Green/Yellow/Red timers
+├── 4_Billing_Checkout.py    # Split bill calculator, tip selector & payment checkout
+└── 5_Owner_Dashboard.py     # KPIs, Plotly sales charts, menu & staff manager
