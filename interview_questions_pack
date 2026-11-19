@@ -1,0 +1,148 @@
+# ZAIKA — FINAL INTERVIEW MASTERY PACK (QUESTIONS & ANSWERS)
+## Behavioural Q&A, Live SQL/Python Coding Q&A & Core CS Rapid-Fire Q&A
+
+================================================================================
+PART 1: PROJECT OVERVIEW & BEHAVIOURAL INTERVIEW Q&A
+================================================================================
+
+Q1. "Walk us through your Zaika Restaurant Management System project in 2 minutes."
+Answer:
+"I built Zaika, a full-stack Restaurant Management System using Python, FastAPI, SQLAlchemy, a hybrid MySQL + SQLite database setup, JWT authentication, and Streamlit.
+
+The problem I wanted to solve is the friction in traditional restaurant dining—where guests wait for menus, kitchen stations lose track of orders, and group bill splitting slows down table turnover.
+
+In Zaika, there are four user roles:
+1. Customers scan a table-specific QR code—no login or app download required—to browse a filterable menu, customize spice levels and portions, place orders, track a live cooking countdown timer, play a Spice Quiz for loyalty points, and trigger one-tap Call Waiter alerts.
+2. Floor Staff log into a JWT-protected tablet view showing a live T1-to-T6 floor map, confirm customer orders to fire them to the kitchen, and resolve waiter alerts with response-time SLA tracking.
+3. Kitchen Staff see a 3-station Kitchen Display System split into Tandoor, Curry, and Drinks with Green, Yellow, and Red urgency timers.
+4. The Owner logs into an analytics dashboard with live Plotly revenue charts, top-selling dishes, staff response metrics, and dynamic menu controls.
+
+Architecturally, Streamlit communicates via REST APIs to FastAPI, where Pydantic validates every payload at the boundary. SQLAlchemy manages atomic transactions in MySQL across 10 normalized relational tables, while a lightweight local SQLite database captures fast operational audit logs without adding lock contention to MySQL. Finally, the entire stack is tested with Pytest and containerized with Docker Compose."
+
+--------------------------------------------------------------------------------
+
+Q2. "What was the hardest bug or trickiest engineering challenge you faced while building Zaika, and how did you solve it?"
+Answer:
+"The trickiest bug happened in the Split Billing and Table Reset workflow. In Zaika, a group of diners can split a table's bill equally among 2, 3, or 4 people. During testing, when two split payments were submitted almost simultaneously for the same table, both requests read the bill's status as 'Unpaid' at the same time—resulting in race conditions where the table either didn't reset to 'Empty' properly or over-counted payments.
+
+To fix this, I did three things:
+1. I wrapped the payment recording and table-reset logic inside a single atomic SQLAlchemy database transaction.
+2. I used row-level locking (.with_for_update()) on the parent bill row so concurrent split payments execute sequentially rather than reading stale balances.
+3. I added an automated Pytest test case simulating sequential split payments to verify that the bill transitions cleanly from 'Unpaid' -> 'Partially_Paid' -> 'Paid' and resets the table to 'Empty' every time."
+
+--------------------------------------------------------------------------------
+
+Q3. "If you had two more weeks to work on Zaika, what feature or architectural upgrade would you build next?"
+Answer:
+"First, I would replace HTTP polling on the Kitchen Display System and Staff Floor Map with FastAPI WebSockets backed by Redis Pub/Sub so kitchen tickets and Call Waiter alerts appear instantaneously with zero idle database polling. Second, I would add an inventory and ingredient-deduction engine so when the last portion of Paneer Tikka is ordered, the menu automatically marks it 'Out of Stock' in real time."
+
+================================================================================
+PART 2: LIVE SQL & PYTHON CODING QUESTIONS & ANSWERS
+================================================================================
+
+Q4 (SQL). "Using your menu_items and order_items tables, write an SQL query to find the top 3 vegetarian dishes generating the highest total revenue."
+Answer:
+SELECT 
+    mi.name AS dish_name,
+    SUM(oi.quantity) AS total_units_sold,
+    SUM(oi.quantity * oi.unit_price) AS total_revenue
+FROM order_items oi
+INNER JOIN menu_items mi ON oi.menu_item_id = mi.id
+WHERE mi.is_veg = TRUE
+GROUP BY mi.id, mi.name
+ORDER BY total_revenue DESC
+LIMIT 3;
+
+--------------------------------------------------------------------------------
+
+Q5 (SQL). "Using users and call_waiter_requests, write a query to list waiters who resolved at least 5 alerts with an average response time under 10 seconds."
+Answer:
+SELECT 
+    u.full_name AS waiter_name,
+    COUNT(cwr.id) AS total_resolved,
+    ROUND(AVG(cwr.response_seconds), 2) AS avg_response_sec
+FROM call_waiter_requests cwr
+INNER JOIN users u ON cwr.resolved_by = u.id
+WHERE cwr.status = 'Resolved'
+GROUP BY u.id, u.full_name
+HAVING COUNT(cwr.id) >= 5 AND AVG(cwr.response_seconds) < 10.0
+ORDER BY avg_response_sec ASC;
+
+--------------------------------------------------------------------------------
+
+Q6 (SQL). "Write an SQL query using LEFT JOIN to find all tables currently marked 'Eating' that do not yet have a 'Paid' bill."
+Answer:
+SELECT 
+    rt.table_number,
+    rt.status
+FROM restaurant_tables rt
+LEFT JOIN bills b 
+    ON rt.id = b.table_id AND b.bill_status = 'Paid'
+WHERE rt.status = 'Eating'
+  AND b.id IS NULL;
+
+--------------------------------------------------------------------------------
+
+Q7 (Python). "Given a list of order item dictionaries, write a Python function that groups active dish tickets by their kitchen_station ('Tandoor', 'Curry', 'Drinks')."
+Answer:
+def group_kds_tickets(items: list[dict]) -> dict[str, list[str]]:
+    grouped = {"Tandoor": [], "Curry": [], "Drinks": []}
+    for item in items:
+        station = item.get("kitchen_station")
+        if station in grouped and item.get("item_status") != "Ready":
+            entry = f"{item['quantity']}x {item['name']} (Table {item['table_number']})"
+            grouped[station].append(entry)
+    return grouped
+
+--------------------------------------------------------------------------------
+
+Q8 (Python). "Write a Python function that takes a dictionary of {person_name: [list_of_item_prices]}, applies 5% GST and a given tip percentage, and returns how much each person owes."
+Answer:
+def split_bill_by_person(
+    person_items: dict[str, list[float]],
+    gst_rate: float = 0.05,
+    tip_rate: float = 0.10
+) -> dict[str, float]:
+    final_shares = {}
+    for person, prices in person_items.items():
+        subtotal = sum(prices)
+        gst = subtotal * gst_rate
+        tip = subtotal * tip_rate
+        final_shares[person] = round(subtotal + gst + tip, 2)
+    return final_shares
+
+================================================================================
+PART 3: CORE CS, DATABASE & REST API RAPID-FIRE Q&A
+================================================================================
+
+Q9. "How are ACID properties enforced in your Zaika MySQL database?"
+Answer:
+- Atomicity: All steps of placing an order or settling a split bill succeed together inside db.commit() or roll back completely via db.rollback() on any error.
+- Consistency: Foreign keys, NOT NULL constraints, CHECK (quantity >= 1), and ENUM statuses prevent invalid database states.
+- Isolation: Row-level locking (.with_for_update()) isolates concurrent split-bill payments so they do not overwrite each other.
+- Durability: Once committed to MySQL, paid bills and closed orders persist safely even if the backend container restarts.
+
+--------------------------------------------------------------------------------
+
+Q10. "What is the difference between HTTP GET, POST, PUT, and PATCH, and which ones are idempotent?"
+Answer:
+- GET reads data without modifying server state (e.g., GET /api/menu). It is safe and idempotent.
+- POST creates a brand-new resource (e.g., POST /api/orders). It is NOT idempotent—calling it twice creates two separate orders unless protected by an idempotency key.
+- PUT replaces an entire resource completely. It is idempotent.
+- PATCH partially updates specific fields of an existing resource (e.g., updating only item_status to 'Ready'). In Zaika, setting an item's status to 'Ready' multiple times produces the exact same state, making it idempotent.
+
+--------------------------------------------------------------------------------
+
+Q11. "Explain the difference between 401 Unauthorized, 403 Forbidden, and 422 Unprocessable Entity in your FastAPI backend."
+Answer:
+- 401 Unauthorized: The user is not authenticated—either the JWT Bearer token is missing, malformed, or expired.
+- 403 Forbidden: The user is authenticated with a valid JWT token, but their role lacks permission (e.g., a 'kitchen' user trying to call an 'owner'-only menu deletion route).
+- 422 Unprocessable Entity: The request syntax is valid JSON, but Pydantic schema validation failed (e.g., negative dish quantity or a review rating of 6.5 stars).
+
+--------------------------------------------------------------------------------
+
+Q12. "What is the difference between a Primary Key, a Foreign Key, and a Unique Index in MySQL?"
+Answer:
+- Primary Key: Uniquely identifies every row in a table, cannot be NULL, and automatically creates a clustered index (e.g., orders.id).
+- Foreign Key: Links a column in a child table to a Primary Key in a parent table to enforce referential integrity (e.g., orders.table_id -> restaurant_tables.id).
+- Unique Index: Ensures no two rows share the same value in a non-primary column while accelerating WHERE lookups (e.g., users.email and restaurant_tables.qr_token).
