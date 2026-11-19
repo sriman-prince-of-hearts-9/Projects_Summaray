@@ -1,0 +1,189 @@
+FASTAPI & PYDANTIC BACKEND NOTES
+## Complete Bit-by-Bit Study Guide & API Examples for Zaika Restaurant Management System
+
+================================================================================
+1. WHAT IS FASTAPI & WHY WE USE IT IN ZAIKA
+================================================================================
+FastAPI is a modern, high-speed Python framework for building REST APIs. It acts as the central brain between your Streamlit screens (Customer QR Menu, Staff Tablet, KDS, Owner Dashboard) and your MySQL/SQLite databases.
+
+Three Key Reasons FastAPI Shines:
+1. Automatic Interactive Docs (`/docs`): Every endpoint you write automatically appears in a clickable Swagger UI test page at `http://localhost:8000/docs`.
+2. Built-in Data Validation (Pydantic): Automatically rejects invalid orders (like `-2 burgers` or invalid ratings like `9.5 stars`) before touching your database.
+3. Clean Python Type Hints: Uses standard Python types (`int`, `str`, `float`, `bool`) to validate inputs and format JSON outputs.
+
+Running Your FastAPI Server:
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+================================================================================
+2. HTTP METHODS & STATUS CODES (THE REST CONTRACT)
+================================================================================
+Every action in Zaika maps to a standard HTTP method and returns a clear status code:
+
+HTTP Methods:
+- `GET`: Read/fetch data without changing anything (e.g., load QR Menu, fetch KDS tickets).
+- `POST`: Create new records (e.g., place a customer order, trigger Call Waiter alert).
+- `PATCH`: Partially update an existing record (e.g., change order status from `Cooking` to `Ready`).
+- `DELETE`: Remove a record (e.g., Owner deletes a discontinued dish).
+
+Essential Status Codes:
+- `200 OK`: Request succeeded (used for `GET`, `PATCH`, `DELETE`).
+- `201 Created`: New resource created successfully (used for `POST` orders, dishes, alerts).
+- `401 Unauthorized`: Missing or invalid staff JWT login token.
+- `403 Forbidden`: Logged in, but wrong role (e.g., Kitchen staff trying to delete a menu item).
+- `404 Not Found`: Table ID, Order ID, or Dish ID does not exist.
+- `422 Unprocessable Entity`: Pydantic caught invalid input data (wrong type, negative quantity, missing field).
+
+================================================================================
+3. PYDANTIC SCHEMAS (`schemas.py`) — STRICT INPUT & OUTPUT VALIDATION
+================================================================================
+Pydantic uses `BaseModel` and `Field` to enforce business rules at the API door. Best practice is separating **Create** schemas (what the user sends) from **Response** schemas (what the API sends back).
+
+```python
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal
+from datetime import datetime
+
+# 1. Menu Item Schemas
+class MenuItemCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100, example="Paneer Tikka")
+    category: Literal["Main Course", "Sides", "Drinks", "Deals"]
+    kitchen_station: Literal["Tandoor", "Curry", "Drinks"]
+    price_half: Optional[float] = Field(None, gt=0)
+    price_full: float = Field(..., gt=0, example=260.00)
+    is_veg: bool = True
+    allergens: Optional[str] = Field(None, example="Dairy")
+    deal_badge: Optional[str] = Field(None, example="Deal of the Day")
+    prep_time_mins: int = Field(15, ge=1, le=120)
+
+class MenuItemResponse(MenuItemCreate):
+    id: int
+    is_available: bool
+
+    class Config:
+        from_attributes = True  # Allows reading directly from SQLAlchemy ORM objects
+
+# 2. Customer Order Item & Order Creation Schemas
+class OrderItemCreate(BaseModel):
+    menu_item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., ge=1, le=20)
+    portion_size: Literal["Half", "Full"] = "Full"
+    spice_choice: Literal["Mild", "Medium", "Hot"] = "Medium"
+
+class OrderCreate(BaseModel):
+    table_id: int = Field(..., gt=0)
+    items: List[OrderItemCreate] = Field(..., min_length=1)
+
+# 3. Call Waiter & Review Schemas
+class CallWaiterCreate(BaseModel):
+    table_id: int = Field(..., gt=0)
+    request_type: Literal["Water", "Napkins", "Bill", "Other Help"]
+
+class ReviewCreate(BaseModel):
+    table_id: int = Field(..., gt=0)
+    bill_id: int = Field(..., gt=0)
+    rating: float = Field(..., ge=1.0, le=5.0)
+    comment: Optional[str] = Field(None, max_length=500)
+```
+
+================================================================================
+4. PATH PARAMETERS, QUERY PARAMETERS & ERROR HANDLING (`HTTPException`)
+================================================================================
+FastAPI distinguishes between **Path Parameters** (identifying a specific item) and **Query Parameters** (filtering a list).
+
+```python
+from fastapi import APIRouter, HTTPException, Query, status
+from typing import Optional
+
+router = APIRouter(prefix="/api/menu", tags=["Menu"])
+
+# Sample in-memory list for quick testing before connecting MySQL in Note 04
+SAMPLE_MENU = [
+    {"id": 1, "name": "Paneer Tikka", "category": "Main Course", "kitchen_station": "Tandoor",
+     "price_half": 160.0, "price_full": 260.0, "is_veg": True, "allergens": "Dairy",
+     "deal_badge": "Deal of the Day", "prep_time_mins": 15, "is_available": True},
+    {"id": 2, "name": "Butter Chicken", "category": "Main Course", "kitchen_station": "Curry",
+     "price_half": 210.0, "price_full": 340.0, "is_veg": False, "allergens": "Dairy,Nuts",
+     "deal_badge": None, "prep_time_mins": 18, "is_available": True},
+]
+
+# Query Parameters: GET /api/menu?category=Main%20Course&veg_only=true&search=paneer
+@router.get("/")
+def get_menu(
+    category: Optional[str] = Query(None, description="Filter by category"),
+    veg_only: bool = Query(False, description="Show only vegetarian dishes"),
+    search: Optional[str] = Query(None, description="Keyword search")
+):
+    results = [dish for dish in SAMPLE_MENU if dish["is_available"]]
+    if category:
+        results = [d for d in results if d["category"].lower() == category.lower()]
+    if veg_only:
+        results = [d for d in results if d["is_veg"] is True]
+    if search:
+        results = [d for d in results if search.lower() in d["name"].lower()]
+    return results
+
+# Path Parameter + HTTPException: GET /api/menu/1
+@router.get("/{item_id}")
+def get_single_dish(item_id: int):
+    for dish in SAMPLE_MENU:
+        if dish["id"] == item_id:
+            return dish
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Menu item with ID {item_id} not found"
+    )
+
+# POST Endpoint returning 201 Created
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def create_dish(payload: MenuItemCreate):
+    new_dish = payload.model_dump()
+    new_dish["id"] = len(SAMPLE_MENU) + 1
+    new_dish["is_available"] = True
+    SAMPLE_MENU.append(new_dish)
+    return new_dish
+```
+
+================================================================================
+5. MODULAR APPLICATION ENTRY POINT (`main.py`) & CORS MIDDLEWARE
+================================================================================
+Instead of stuffing 20+ endpoints into a single massive file, Zaika organizes endpoints into clean files inside `backend/routers/` and mounts them inside `main.py`.
+
+`CORSMiddleware` is mandatory so your Streamlit frontend (running on port `8501`) is allowed to talk to your FastAPI backend (running on port `8000`).
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from backend.routers import menu_router
+
+app = FastAPI(
+    title="Zaika Restaurant Management API",
+    description="Backend REST API for QR Ordering, Staff Floor Map, KDS & Owner Analytics",
+    version="1.0.0"
+)
+
+# Allow Streamlit frontend to communicate with FastAPI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict to your Streamlit domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register modular routers
+app.include_router(menu_router.router)
+
+@app.get("/", tags=["Health"])
+def health_check():
+    return {"status": "online", "service": "Zaika Restaurant API"}
+```
+
+================================================================================
+6. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 04)
+================================================================================
+1. Create `backend/schemas.py`, `backend/routers/menu_router.py`, and `backend/main.py` using the code above.
+2. Start the server with `uvicorn backend.main:app --reload`.
+3. Open `http://127.0.0` in your browser.
+4. Test `POST /api/menu/` with a valid dish (`201 Created`) and then try sending `price_full: -50` to watch Pydantic automatically block it with a `422 Unprocessable Entity` error!
