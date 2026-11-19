@@ -1,0 +1,105 @@
+# ZAIKA — "WHY THIS INSTEAD OF THAT?" PANEL INTERVIEW Q&A
+## High-Impact Architectural Trade-Off Answers to Stand Out Before the Panel
+
+================================================================================
+1. FASTAPI vs. FLASK vs. DJANGO
+================================================================================
+Panel Question:
+"Why did you choose FastAPI for Zaika instead of Flask (simpler) or Django (batteries-included)?"
+
+Standout Answer:
+- Why not Flask? Flask lacks built-in request validation and automatic API documentation. In a restaurant system handling complex nested JSON payloads (like custom spice levels, half/full portions, and split bills), Flask requires bolting on extra libraries like Marshmallow and Flasgger, increasing boilerplate and bug risk.
+- Why not Django? Django's built-in admin panel and template engine are tightly coupled to server-rendered HTML, which we didn't need since Streamlit handles our UI. Django is heavier for pure microservice/REST API backends.
+- Why FastAPI wins: FastAPI uses Python type hints with Pydantic to validate bad payloads automatically (returning clean 422 errors), generates live Swagger UI docs at /docs out of the box, and supports async concurrency for high-throughput order bursts during peak dinner hours.
+
+================================================================================
+2. MYSQL vs. MONGODB (SQL vs. NOSQL)
+================================================================================
+Panel Question:
+"Restaurant menus have varying attributes like spice levels, allergens, and half/full portions. Why didn't you use a flexible NoSQL database like MongoDB instead of MySQL?"
+
+Standout Answer:
+- Why not MongoDB? While a menu looks document-oriented, a restaurant's core operations—orders, split bills, partial payments, GST tax calculations, and table state transitions—are strictly transactional and relational. In MongoDB, maintaining consistency across split bills, multi-item orders, and live table statuses requires complex multi-document transactions or duplicate embedded data.
+- Why MySQL wins: MySQL gives us strict ACID compliance, Foreign Key constraints (so an order item can never reference a deleted menu item), and fast SQL aggregations (SUM, GROUP BY, INNER JOIN) for itemized GST billing and Owner revenue analytics.
+
+================================================================================
+3. HYBRID MYSQL + SQLITE vs. SINGLE DATABASE
+================================================================================
+Panel Question:
+"Why did you use BOTH MySQL and SQLite in the same project? Isn't maintaining two databases unnecessary complexity?"
+
+Standout Answer:
+- The Engineering Trade-Off: Every time a waiter logs in, views a screen, or clicks a status button, generating an audit trail writes rows rapidly. Writing high-frequency operational logs directly into the primary MySQL server adds unnecessary I/O and lock contention alongside critical customer billing transactions.
+- Why Hybrid Wins: Separating concerns keeps MySQL clean and dedicated to core transactional business data, while SQLite acts as an ultra-fast, zero-configuration local event log (audit_logs.db) with zero network latency.
+- Production Caveat (Bonus Point): I also recognize that if we scale the backend across multiple horizontal containers, a local SQLite file wouldn't share state across instances—so in a multi-node cluster, I would swap SQLite for Redis Streams or a dedicated time-series/log store.
+
+================================================================================
+4. STREAMLIT vs. REACT / NEXT.JS
+================================================================================
+Panel Question:
+"Most production web apps use React or Angular on the frontend. Why did you choose Streamlit instead of React?"
+
+Standout Answer:
+- Speed-to-Market & Unified Stack: Building four separate interfaces (Customer Mobile QR Menu, Staff Floor Map, 3-Station KDS, and Owner Plotly Analytics) in React would require managing a separate JavaScript/TypeScript codebase, state libraries like Redux, and CSS styling.
+- Why Streamlit Wins: Streamlit allowed me to build all four reactive interfaces plus interactive Plotly charts in 100% Python, sharing the exact same data models and team skill set while delivering a working end-to-end MVP rapidly.
+- Trade-Off Acknowledgment: For a massive consumer-facing app with custom animations and offline PWA caching on low-end mobile phones, I would migrate the Customer QR Menu to React/Next.js while keeping Streamlit for internal Owner/Admin analytics.
+
+================================================================================
+5. SQLALCHEMY ORM vs. RAW SQL QUERIES
+================================================================================
+Panel Question:
+"Why use SQLAlchemy ORM instead of writing raw SQL queries directly with pymysql?"
+
+Standout Answer:
+- Security & Maintainability: Raw SQL strings scattered across endpoints are prone to SQL injection vulnerabilities if parameters aren't sanitized, and any schema change (like adding a column to orders) forces manual string edits across dozens of files.
+- Why SQLAlchemy Wins: SQLAlchemy gives us parameterized queries by default (preventing SQL injection), clean object relationships (order.items), database-agnostic portability, and atomic session transactions (db.commit() / db.rollback()) when updating orders, tables, and loyalty points together.
+- When I'd Use Raw SQL: For ultra-heavy historical reporting queries on millions of rows where ORM object hydration adds overhead, I would drop down to raw SQL or indexed views.
+
+================================================================================
+6. JWT TOKENS vs. SERVER-SIDE SESSION COOKIES
+================================================================================
+Panel Question:
+"Why did you choose stateless JWT Bearer tokens for Staff, Kitchen, and Owner authentication instead of traditional server-side session cookies?"
+
+Standout Answer:
+- Decoupled Architecture: Because our frontend (Streamlit on port 8501) and backend (FastAPI on port 8000) run as independent services—and could easily serve native Android/iOS staff tablets in the future—stateless JWT tokens passed in the Authorization header work cleanly across any client without relying on browser cookie domains or CSRF tokens.
+- Role Claims Inside Payload: Embedding the user's role ('staff', 'kitchen', 'owner') directly inside the signed JWT payload lets FastAPI route guards verify permissions quickly.
+
+================================================================================
+7. NO-LOGIN QR TOKENS vs. CUSTOMER OTP / ACCOUNT SIGN-UP
+================================================================================
+Panel Question:
+"Why didn't you require customers to log in with their phone number and OTP before ordering? Wouldn't that give you better customer data?"
+
+Standout Answer:
+- Eliminating Dining Friction: In a real restaurant, forcing hungry guests to download an app, type a phone number, and wait for an SMS OTP causes massive drop-off—especially where cellular signal indoors is weak.
+- Why Table QR Tokens Win: Embedding a unique cryptographic token per table (?table=T1&token=...) gives instant zero-friction access while still preventing unauthorized remote orders, and we capture optional guest emails/sessions later during receipt delivery or loyalty reward claims.
+
+================================================================================
+8. PYDANTIC VALIDATION vs. MANUAL IF/ELSE CHECKS
+================================================================================
+Panel Question:
+"Why rely on Pydantic schemas instead of writing simple if/else validation checks inside your FastAPI route functions?"
+
+Standout Answer:
+- Declarative Single Source of Truth: Manual if/else checks clutter business logic, often miss edge cases (like type coercion or nested list validation), and must be rewritten across endpoints.
+- Why Pydantic Wins: Pydantic validates data types, string lengths, numeric ranges (quantity >= 1, rating 1.0–5.0), and nested order items declaratively at the API boundary before our business logic even runs, while automatically generating accurate OpenAPI/Swagger documentation.
+
+================================================================================
+9. ENUM COLUMNS vs. PLAIN VARCHAR STRINGS FOR STATUSES
+================================================================================
+Panel Question:
+"In MySQL, why did you define order and table statuses using ENUM('Empty', 'Ordering', ...) instead of a simple VARCHAR(20)?"
+
+Standout Answer:
+- Database-Level Guardrail: With VARCHAR(20), a bug in any client could accidentally insert inconsistent strings like 'cooking', 'COOKING', or 'In_Kitchen', breaking KDS filters and analytics queries.
+- Why ENUM Wins: ENUM enforces a strict finite state machine directly at the storage engine level, rejects invalid states automatically, and stores values internally as compact integer indexes—saving disk space and speeding up WHERE status = 'Cooking' queries.
+
+================================================================================
+10. DOCKER COMPOSE vs. LOCAL VIRTUAL ENVIRONMENT SETUP
+================================================================================
+Panel Question:
+"Your app already runs with Python venv and Uvicorn. Why add Dockerfiles and docker-compose.yml?"
+
+Standout Answer:
+- Eliminating "Works on My Machine" Failures: Running Zaika locally requires manually installing MySQL 8.0, creating databases, matching Python 3.11 versions, and launching two separate terminals with matching .env variables.
