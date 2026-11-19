@@ -1,0 +1,251 @@
+# NOTE 05: JWT AUTHENTICATION, RBAC & QR SECURITY NOTES
+## Complete Bit-by-Bit Study Guide & Security Examples for Zaika Restaurant Management System
+
+================================================================================
+1. ZAIKA'S 4-ROLE SECURITY ARCHITECTURE
+================================================================================
+Zaika serves four distinct user groups, each requiring tailored access control:
+1. Customer (`customer`): Zero login or registration required. Authenticated purely by scanning a table's unique QR URL (`?table=T1&token=tok_t1_99a1`). Can browse the menu, place orders, track cooking timers, play the Spice Quiz, call a waiter, pay bills, and leave reviews.
+2. Staff / Waiter (`staff`): Login required (email + password -> JWT token). Can view the Live Floor Map, confirm customer orders ("Send to Kitchen"), resolve Call Waiter alerts, and process table billing.
+3. Kitchen Staff (`kitchen`): Login required (JWT token). Restricted strictly to the 3-Station Kitchen Display System (`Tandoor`, `Curry`, `Drinks`) to mark items `Cooking` -> `Ready`.
+4. Owner / Admin (`owner`): Login required (JWT token). Full administrative access to Owner Analytics, Menu Management (Add/Edit/Delete dishes), Staff Account Creation, and SQLite Audit Logs.
+
+Required Packages:
+```bash
+pip install "python-jose[cryptography]" "passlib[bcrypt]" python-multipart
+```
+
+================================================================================
+2. PASSWORD HASHING WITH BCRYPT (`backend/auth.py`)
+================================================================================
+Never store plain-text passwords like `"admin123"` in MySQL. We use `passlib` with `bcrypt` to convert passwords into irreversible cryptographic hashes (`$2b$12$...`) before saving them, and verify login attempts against the hash.
+
+```python
+import os
+from datetime import datetime, timedelta
+from typing import List, Optional
+from dotenv import load_dotenv
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+
+from backend.database import get_db
+from backend.models import User
+
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY", "zaika_super_secret_jwt_key_2026")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8-hour restaurant shift
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+def hash_password(plain_password: str) -> str:
+    return pwd_context.hash(plain_password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+```
+
+================================================================================
+3. GENERATING & DECODING JWT TOKENS (`backend/auth.py` CONTINUED)
+================================================================================
+When a Staff, Kitchen, or Owner user logs in with valid credentials, FastAPI signs a JSON Web Token (JWT) containing their user ID (`sub`), role (`role`), and expiration time (`exp`). Streamlit stores this token in `st.session_state` and sends it in the `Authorization: Bearer <token>` header on every protected API call.
+
+```python
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials or token expired",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = db.query(User).filter(User.id == int(user_id), User.is_active == True).first()
+    if user is None:
+        raise credentials_exception
+    return user
+```
+
+================================================================================
+4. ROLE-BASED ACCESS CONTROL (RBAC) ROUTE GUARDS
+================================================================================
+Using Python closures, we create a reusable `require_role([...])` dependency. Any FastAPI endpoint protected with `Depends(require_role(["owner"]))` automatically blocks unauthorized roles with a `403 Forbidden` status code before the function body even runs!
+
+```python
+def require_role(allowed_roles: List[str]):
+    def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required role: {allowed_roles}, your role: '{current_user.role}'"
+            )
+        return current_user
+    return role_checker
+```
+
+How Role Guards Protect Your Endpoints Across Routers:
+```python
+from fastapi import APIRouter
+
+# Example 1: Owner-Only Menu Creation
+@router.post("/api/menu", status_code=201)
+def add_menu_item(
+    payload: MenuItemCreate,
+    db: Session = Depends(get_db),
+    owner: User = Depends(require_role(["owner"]))
+):
+    # Only runs if JWT belongs to an active 'owner'
+    ...
+
+# Example 2: Staff OR Owner Can Confirm Orders to Kitchen
+@router.patch("/api/orders/{order_id}/confirm")
+def confirm_order_to_kitchen(
+    order_id: int,
+    db: Session = Depends(get_db),
+    staff_user: User = Depends(require_role(["staff", "owner"]))
+):
+    ...
+
+# Example 3: Kitchen OR Owner Can Update KDS Item Status
+@router.patch("/api/kds/items/{item_id}/status")
+def update_kds_status(
+    item_id: int,
+    db: Session = Depends(get_db),
+    kitchen_user: User = Depends(require_role(["kitchen", "owner"]))
+):
+    ...
+```
+
+================================================================================
+5. AUTH ROUTER: LOGIN & OWNER USER CREATION (`backend/routers/auth_router.py`)
+================================================================================
+FastAPI's `OAuth2PasswordRequestForm` makes login work seamlessly with both Swagger UI's "Authorize" padlock button and Streamlit's `requests.post()` login form.
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, EmailStr, Field
+from typing import Literal
+from sqlalchemy.orm import Session
+
+from backend.database import get_db, get_audit_db
+from backend.models import User, ActivityLog
+from backend.auth import hash_password, verify_password, create_access_token, require_role
+
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+class UserRegisterSchema(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    role: Literal["staff", "kitchen", "owner"]
+
+@router.post("/login")
+def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    audit_db: Session = Depends(get_audit_db)
+):
+    # Note: OAuth2PasswordRequestForm uses 'username' field for email
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password"
+        )
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is deactivated")
+
+    access_token = create_access_token(data={"sub": str(user.id), "role": user.role})
+
+    # Log login event to SQLite
+    audit_db.add(ActivityLog(
+        actor_role=user.role,
+        actor_id=user.id,
+        action="USER_LOGIN",
+        details=f"{user.full_name} ({user.role}) logged in"
+    ))
+    audit_db.commit()
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role
+        }
+    }
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register_staff_account(
+    payload: UserRegisterSchema,
+    db: Session = Depends(get_db),
+    owner: User = Depends(require_role(["owner"]))
+):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    new_user = User(
+        full_name=payload.full_name,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role=payload.role
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": f"Created {new_user.role} account for {new_user.full_name}", "id": new_user.id}
+```
+
+================================================================================
+6. CUSTOMER QR TOKEN VERIFICATION (NO-LOGIN SECURITY)
+================================================================================
+Even though customers do not log in, each table (T1–T6) has a unique secret qr_token stored in restaurant_tables (e.g., tok_t1_99a1). When a customer scans the QR code on Table T1, Streamlit reads ?table=T1&token=tok_t1_99a1 and verifies it against this public endpoint so pranksters cannot place fake orders for Table T5 by guessing URLs.
+```python
+from backend.models import RestaurantTable
+@router.get("/verify-qr")
+def verify_table_qr(table: str, token: str, db: Session = Depends(get_db)):
+record = db.query(RestaurantTable).filter(
+RestaurantTable.table_number == table,
+RestaurantTable.qr_token == token
+).first()
+if not record:
+raise HTTPException(status_code=403, detail="Invalid or expired Table QR Code")
+return {
+"valid": True,
+"table_id": record.id,
+"table_number": record.table_number,
+"status": record.status,
+"current_points": record.current_points
+}
+```
+
+================================================================================
+7. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 06)
+
+1. Create backend/auth.py and backend/routers/auth_router.py and register auth_router in main.py.
+2. Write a tiny seed_owner.py script to insert one default Owner user (owner@zaika.com / owner123) using hash_password("owner123").
+3. Open Swagger UI (/docs), click the green Authorize button at the top right, log in as owner@zaika.com, and test creating a kitchen user via POST /api/auth/register.
+4. Log in as that new kitchen user and try calling POST /api/auth/register again to verify FastAPI blocks it with 403 Forbidden!
