@@ -1,0 +1,238 @@
+# NOTE 01: PYTHON FOUNDATION NOTES
+## Complete Bit-by-Bit Study Guide & Code Examples for Zaika Restaurant Management System
+
+================================================================================
+1. VARIABLES, DATA TYPES & TYPE HINTS
+================================================================================
+Python stores data in variables without needing explicit type declarations, though adding type hints (`str`, `int`, `float`, `bool`) makes your code cleaner and prepares you directly for FastAPI and Pydantic.
+
+Key Data Types in Zaika:
+- `str` (String): Text values like `"T1"`, `"Paneer Tikka"`, `"Tandoor"`, `"Cooking"`.
+- `int` (Integer): Whole numbers like `quantity = 2`, `prep_time_mins = 15`, `points = 160`.
+- `float` (Floating-point): Decimal money values like `price = 250.00`, `gst_rate = 0.05`.
+- `bool` (Boolean): True/False flags like `is_veg = True`, `is_available = False`.
+
+Example (Zaika Dish & Table Variables):
+```python
+table_number: str = "T1"
+dish_name: str = "Butter Chicken"
+price_full: float = 320.00
+quantity: int = 2
+is_veg: bool = False
+is_available: bool = True
+
+line_total: float = price_full * quantity
+print(f"Table {table_number}: {quantity}x {dish_name} = Rs.{line_total}")
+```
+
+================================================================================
+2. CORE DATA STRUCTURES: LISTS, DICTIONARIES, TUPLES & SETS
+================================================================================
+Understanding Lists and Dictionaries is the single most important Python skill for full-stack development because JSON data sent between Streamlit and FastAPI is made of nested Lists and Dictionaries.
+
+A. Lists (`[...]`) — Ordered, changeable collections (e.g., a customer's shopping cart):
+```python
+cart = ["Paneer Tikka", "Butter Naan", "Mango Lassi"]
+cart.append("Dal Makhani")       # Add item to end
+cart.remove("Mango Lassi")       # Remove specific item
+print("Items in cart:", len(cart))
+print("First item:", cart[0])
+```
+
+B. Dictionaries (`{key: value}`) — Key-value pairs (e.g., a single dish or order item):
+```python
+order_item = {
+    "menu_item_id": 101,
+    "name": "Paneer Tikka",
+    "portion_size": "Full",
+    "spice_choice": "Medium",
+    "quantity": 2,
+    "unit_price": 250.00,
+    "is_veg": True
+}
+
+# Accessing & updating values safely
+print(order_item["name"])                        # "Paneer Tikka"
+print(order_item.get("allergens", "None"))       # Safe lookup with default
+order_item["quantity"] += 1                      # Increase quantity to 3
+```
+
+C. List of Dictionaries (Real-World JSON Payload Structure):
+```python
+cart_items = [
+    {"name": "Paneer Tikka", "qty": 2, "price": 250.0, "is_veg": True, "station": "Tandoor"},
+    {"name": "Chicken Biryani", "qty": 1, "price": 340.0, "is_veg": False, "station": "Curry"},
+    {"name": "Mango Lassi", "qty": 2, "price": 110.0, "is_veg": True, "station": "Drinks"}
+]
+```
+
+D. Tuples (`(...)`) & Sets (`{...}`):
+- Tuple (Immutable fixed options): `VALID_STATUSES = ("Placed", "Confirmed", "Cooking", "Ready", "Served", "Closed")`
+- Set (Unique values with no duplicates): `active_stations = {"Tandoor", "Curry", "Drinks"}`
+
+================================================================================
+3. CONDITIONALS (`if/elif/else`), LOOPS & COMPREHENSIONS
+================================================================================
+Conditionals control business rules (like KDS timer colors and loyalty reward unlocks), while loops and list comprehensions process menus and bills in one clean line.
+
+A. KDS Urgency Timer Logic (`if / elif / else`):
+```python
+def get_kds_card_color(elapsed_minutes: int) -> str:
+    if elapsed_minutes <= 5:
+        return "GREEN"    # New order
+    elif elapsed_minutes <= 12:
+        return "YELLOW"   # Cooking long
+    else:
+        return "RED"      # Late / Overdue
+
+print(get_kds_card_color(3))   # GREEN
+print(get_kds_card_color(9))   # YELLOW
+print(get_kds_card_color(15))  # RED
+```
+
+B. Loops & List Comprehensions (Filtering & Bill Sum):
+```python
+# Filter only Veg items using a list comprehension
+veg_items = [item for item in cart_items if item["is_veg"] is True]
+
+# Route items to the Tandoor station
+tandoor_orders = [item["name"] for item in cart_items if item["station"] == "Tandoor"]
+
+# Calculate cart subtotal using sum()
+subtotal = sum(item["qty"] * item["price"] for item in cart_items)
+print(f"Subtotal: Rs.{subtotal:.2f}")
+```
+
+================================================================================
+4. FUNCTIONS, `*args`, `**kwargs` & BILLING CALCULATIONS
+================================================================================
+Functions package reusable logic so you don't repeat math across your API and UI.
+
+A. Complete Bill, GST, Tip & Split Calculator:
+```python
+def calculate_table_bill(
+    subtotal: float,
+    gst_percent: float = 5.0,
+    tip_percent: float = 10.0,
+    split_count: int = 1
+) -> dict:
+    gst_amount = round(subtotal * (gst_percent / 100), 2)
+    tip_amount = round(subtotal * (tip_percent / 100), 2)
+    grand_total = round(subtotal + gst_amount + tip_amount, 2)
+    per_person = round(grand_total / max(split_count, 1), 2)
+
+    return {
+        "subtotal": subtotal,
+        "gst_amount": gst_amount,
+        "tip_amount": tip_amount,
+        "grand_total": grand_total,
+        "split_count": split_count,
+        "per_person_amount": per_person
+    }
+
+bill = calculate_table_bill(subtotal=1060.0, tip_percent=10.0, split_count=2)
+print(bill)
+```
+
+B. `*args` and `**kwargs` (Flexible Arguments):
+- `*args` accepts any number of positional values as a tuple.
+- `**kwargs` accepts any number of named keyword arguments as a dictionary (used heavily in SQLAlchemy models and FastAPI dependencies).
+```python
+def log_audit_event(action: str, *tags, **metadata):
+    print(f"ACTION: {action} | TAGS: {tags} | DETAILS: {metadata}")
+
+log_audit_event("ORDER_PLACED", "T1", "QR_MENU", table="T1", total=1060.0)
+```
+
+================================================================================
+5. OBJECT-ORIENTED PROGRAMMING (OOP) FOR MODELS & SCHEMAS
+================================================================================
+SQLAlchemy database tables and Pydantic schemas are both Python classes. Understanding `__init__`, attributes, methods, and inheritance makes backend coding effortless.
+
+```python
+class MenuItem:
+    def __init__(self, item_id: int, name: str, price_full: float, station: str, is_veg: bool = True):
+        self.item_id = item_id
+        self.name = name
+        self.price_full = price_full
+        self.station = station
+        self.is_veg = is_veg
+
+    def apply_discount(self, discount_percent: float) -> float:
+        discounted = self.price_full * (1 - discount_percent / 100)
+        return round(discounted, 2)
+
+# Inheritance: DealItem inherits everything from MenuItem
+class DealItem(MenuItem):
+    def __init__(self, item_id: int, name: str, price_full: float, station: str, badge: str):
+        super().__init__(item_id, name, price_full, station)
+        self.badge = badge
+
+paneer = DealItem(1, "Paneer Tikka Platter", 300.0, "Tandoor", "Deal of the Day")
+print(f"{paneer.name} [{paneer.badge}] -> Deal Price: Rs.{paneer.apply_discount(15)}")
+```
+
+================================================================================
+6. ESSENTIAL MODULES: `datetime`, `try/except`, `json` & `.env`
+================================================================================
+1. `datetime` & `timedelta` — Live Cooking Countdown & Waiter Response SLA:
+```python
+from datetime import datetime, timedelta
+
+# Calculate estimated ready time (15 mins from now)
+placed_at = datetime.now()
+estimated_ready_at = placed_at + timedelta(minutes=15)
+
+# Calculate remaining seconds for customer countdown timer
+remaining_seconds = int((estimated_ready_at - datetime.now()).total_seconds())
+mins, secs = divmod(max(remaining_seconds, 0), 60)
+print(f"Your food is cooking - {mins:02d}:{secs:02d} min left")
+
+# Calculate Call Waiter response time
+alert_time = datetime.now() - timedelta(seconds=8)
+response_seconds = int((datetime.now() - alert_time).total_seconds())
+print(f"Waiter Reached in {response_seconds} sec")
+```
+
+2. Exception Handling (`try / except`) — Preventing App Crashes:
+```python
+def parse_quantity(raw_value: str) -> int:
+    try:
+        qty = int(raw_value)
+        if qty <= 0:
+            raise ValueError("Quantity must be at least 1")
+        return qty
+    except ValueError as err:
+        print(f"Invalid input: {err}")
+        return 1
+```
+
+3. Environment Variables (`.env` + `python-dotenv`) — Keeping Secrets Safe:
+Create a `.env` file in your project root:
+```env
+MYSQL_URL=mysql+pymysql://root:password@localhost:3306/zaika_db
+SQLITE_URL=sqlite:///./audit_logs.db
+SECRET_KEY=zaika_super_secret_jwt_key_2026
+```
+Load it inside Python:
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+MYSQL_URL = os.getenv("MYSQL_URL")
+SECRET_KEY = os.getenv("SECRET_KEY")
+```
+
+================================================================================
+7. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 02)
+================================================================================
+Before moving to MySQL, write a single Python script (`practice_zaika.py`) that:
+
+
+
+
+1. Creates a list of 4 menu dish dictionaries across "Tandoor", "Curry", and "Drinks".
+2. Builds a customer cart list with quantities and sizes.
+3. Calls calculate_table_bill() to compute Subtotal, 5% GST, 10% Tip, and a 3-way split.
+4. Prints a countdown timer using datetime + timedelta
