@@ -1,0 +1,57 @@
+
+Stage 1: Python Foundation (1.5 Weeks)
+
+• Core Syntax & Control Flow: Variables, data types (int, float, str, bool), if/elif/else, for/while loops, functions, *args and **kwargs.
+• Data Structures:
+	• Lists & Tuples: Managing shopping cart items and menu lists.
+	• Dictionaries: Handling JSON payloads from FastAPI (order["items"]).
+	• List/Dict Comprehensions: Filtering Veg dishes or calculating cart totals cleanly.
+• Object-Oriented Programming (OOP): Classes, objects, __init__, and inheritance (essential for SQLAlchemy models and Pydantic schemas).
+• Essential Built-in Modules:
+	• datetime & timedelta: Calculating live KDS cooking timers ("11:30 min left") and waiter SLA response times ("Reached in 8 sec").
+	• try / except: Catching network or database errors gracefully so the UI never crashes.
+	• os & python-dotenv: Loading secret database URLs and JWT keys from .env.
+
+Stage 2: MySQL & Relational Database Design (1 Week)
+
+• Core SQL Commands: CREATE TABLE, INSERT, SELECT, UPDATE, DELETE.
+• Filtering & Grouping: WHERE, AND/OR, LIKE (menu search), IN, ORDER BY, COUNT, SUM, AVG, GROUP BY (daily revenue & top dishes).
+• Table Joins: INNER JOIN and LEFT JOIN (combining orders -> order_items -> menu_items to generate itemized bills).
+• Keys & Constraints: Primary Key, Foreign Key (with ON DELETE CASCADE), Unique, NOT NULL, ENUM (for order/table statuses), Auto Increment.
+• Database Normalization: Designing clean 1NF, 2NF, and 3NF tables to avoid duplicate dish names or prices across orders.
+
+Stage 3: FastAPI & Pydantic Backend (1.5 Weeks)
+
+• HTTP Methods & Routing: @app.get, @app.post, @app.patch, @app.delete.
+• Parameters: Path parameters (/tables/{table_id}) and Query parameters (/menu?category=Deals&veg_only=true).
+• HTTP Status Codes: 200 OK, 201 Created, 401 Unauthorized, 403 Forbidden, 404 Not Found, 422 Unprocessable Entity.
+• Pydantic Schemas: Creating separate Create, Update, and Response BaseModel classes using Field(..., gt=0) for automatic data validation.
+• Middleware & Error Handling: Configuring CORSMiddleware and raising structured HTTPException responses.
+• Interactive Testing: Testing every route live via Swagger UI at http://localhost:8000/docs.
+
+Stage 4: SQLAlchemy ORM & Dual-Database Setup (1 Week)
+
+• Database Engines & Sessions: Configuring two create_engine() instances (MySQL + SQLite) in database.py and injecting sessions with Depends(get_db).
+• Declarative Models: Defining all 10 MySQL tables and 1 SQLite audit table in models.py with relationship() back-populates.
+• CRUD Queries: Mastering db.add(), db.commit(), db.refresh(), db.query().filter().first(), and db.query().filter().all().
+• Transactions: Ensuring atomic updates (e.g., when a bill is marked Paid, all table orders become Closed and the table resets to Empty in one commit).
+
+Stage 5: Authentication & Role-Based Access Control (4 Days)
+
+• Password Security: Hashing passwords with passlib.context.CryptContext(schemes=["bcrypt"]).
+• JWT Flow: Creating access tokens with expiration times upon /api/auth/login.
+• Role Guards: Writing FastAPI dependencies like require_role(["owner"]) or require_role(["staff", "owner"]) so Kitchen staff can only access KDS routes while Customers need no login.
+
+Stage 6: Streamlit Frontend & Multi-Page App (1 Week)
+
+• Core UI Widgets: st.title, st.header, st.text_input, st.number_input, st.selectbox, st.radio, st.button, st.form, st.metric, st.progress.
+• Layouts & Navigation: st.columns (for the 3-column KDS board and T1–T6 floor grid), st.tabs, st.sidebar, and multi-page routing inside /pages.
+• State & URL Query Params:
+	• st.query_params: Reading ?table=T1&token=xyz when a customer scans a QR code.
+	• st.session_state: Persisting the customer's shopping cart, loyalty points, and staff JWT login token across reruns.
+• Live Polling & Charts: Auto-refreshing KDS timers/waiter alerts and plotting sales analytics with st.plotly_chart().
+
+Stage 7: Automated Testing & Docker Deployment (3 Days)
+
+• Pytest Suite (test_api.py): Writing automated tests with TestClient to verify valid order creation (201), negative quantity rejection (422), and unauthorized access blocking (401).
+• Containerization: Writing a Dockerfile for FastAPI, a Dockerfile for Streamlit, and a docker-compose.yml file to launch the entire stack with a single command (docker-compose up --build).
