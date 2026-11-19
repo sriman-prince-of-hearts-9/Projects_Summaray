@@ -1,0 +1,224 @@
+ MYSQL & RELATIONAL DATABASE NOTES
+## Complete Bit-by-Bit Study Guide & SQL Examples for Zaika Restaurant Management System
+
+================================================================================
+1. DATABASE SETUP & CORE DATA TYPES
+================================================================================
+MySQL acts as Zaika's primary relational database (`zaika_db`), permanently storing users, tables, menu dishes, orders, bills, payments, waiter alerts, reviews, and loyalty points.
+
+Essential MySQL Data Types Used in Zaika:
+- `INT AUTO_INCREMENT`: Unique numeric IDs generated automatically (`1, 2, 3...`).
+- `VARCHAR(n)`: Variable-length text up to `n` characters (names, emails, table numbers).
+- `TEXT`: Long free-form text (customer feedback comments).
+- `DECIMAL(10, 2)`: Exact currency values without floating-point rounding bugs (`250.00`).
+- `BOOLEAN` (`TINYINT(1)`): `TRUE` or `FALSE` flags (`is_veg`, `is_available`, `is_active`).
+- `ENUM(...)`: Restricts a column to a fixed list of valid states (prevents invalid statuses).
+- `DATETIME`: Stores date and time (`2026-11-19 19:30:00`) for cooking timers and SLA tracking.
+
+Creating the Database:
+```sql
+CREATE DATABASE IF NOT EXISTS zaika_db
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+USE zaika_db;
+```
+
+================================================================================
+2. KEYS, CONSTRAINTS & TABLE CREATION (DDL)
+================================================================================
+Constraints enforce data integrity directly inside MySQL so bad data can never corrupt your restaurant records:
+- `PRIMARY KEY`: Uniquely identifies every row in a table (`id`).
+- `FOREIGN KEY`: Links a child row to a valid parent row (`orders.table_id` -> `restaurant_tables.id`).
+- `ON DELETE CASCADE`: Automatically deletes child `order_items` if their parent `order` is deleted.
+- `UNIQUE`: Blocks duplicate entries (no two tables can both be `"T1"`).
+- `NOT NULL`: Requires a value before saving.
+- `DEFAULT`: Automatically fills a starting value if none is provided.
+
+Creating Zaika's Core Tables:
+```sql
+-- 1. Restaurant Tables (T1 to T6)
+CREATE TABLE restaurant_tables (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    table_number VARCHAR(10) UNIQUE NOT NULL,
+    capacity INT NOT NULL DEFAULT 4,
+    qr_token VARCHAR(64) UNIQUE NOT NULL,
+    status ENUM('Empty', 'Ordering', 'Eating', 'Bill Requested', 'Needs Help') NOT NULL DEFAULT 'Empty',
+    current_points INT NOT NULL DEFAULT 0
+);
+
+-- 2. Menu Items
+CREATE TABLE menu_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    category ENUM('Main Course', 'Sides', 'Drinks', 'Deals') NOT NULL,
+    kitchen_station ENUM('Tandoor', 'Curry', 'Drinks') NOT NULL,
+    price_half DECIMAL(10, 2) NULL,
+    price_full DECIMAL(10, 2) NOT NULL,
+    is_veg BOOLEAN NOT NULL DEFAULT TRUE,
+    spice_levels VARCHAR(50) NOT NULL DEFAULT 'Mild,Medium,Hot',
+    allergens VARCHAR(100) NULL,
+    deal_badge VARCHAR(50) NULL,
+    prep_time_mins INT NOT NULL DEFAULT 15,
+    image_url VARCHAR(255) NULL,
+    is_available BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- 3. Orders
+CREATE TABLE orders (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    table_id INT NOT NULL,
+    confirmed_by INT NULL,
+    status ENUM('Placed', 'Confirmed', 'Cooking', 'Ready', 'Served', 'Closed') NOT NULL DEFAULT 'Placed',
+    placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cooking_started_at DATETIME NULL,
+    estimated_ready_at DATETIME NULL,
+    FOREIGN KEY (table_id) REFERENCES restaurant_tables(id)
+);
+
+-- 4. Order Items (Junction Table linking Orders <-> Menu Items)
+CREATE TABLE order_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    menu_item_id INT NOT NULL,
+    quantity INT NOT NULL CHECK (quantity >= 1),
+    portion_size ENUM('Half', 'Full') NOT NULL DEFAULT 'Full',
+    spice_choice ENUM('Mild', 'Medium', 'Hot') NOT NULL DEFAULT 'Medium',
+    unit_price DECIMAL(10, 2) NOT NULL,
+    item_status ENUM('Pending', 'Cooking', 'Ready') NOT NULL DEFAULT 'Pending',
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
+);
+```
+
+================================================================================
+3. CRUD OPERATIONS (INSERT, SELECT, UPDATE, DELETE)
+================================================================================
+Every screen in Zaika performs four basic database actions:
+
+A. CREATE (`INSERT INTO`) — Adding Tables & Menu Dishes:
+```sql
+INSERT INTO restaurant_tables (table_number, capacity, qr_token) VALUES
+('T1', 2, 'tok_t1_99a1'),
+('T2', 4, 'tok_t2_88b2'),
+('T3', 4, 'tok_t3_77c3');
+
+INSERT INTO menu_items (name, category, kitchen_station, price_half, price_full, is_veg, allergens, deal_badge, prep_time_mins)
+VALUES
+('Paneer Tikka', 'Main Course', 'Tandoor', 160.00, 260.00, TRUE, 'Dairy', 'Deal of the Day', 15),
+('Butter Chicken', 'Main Course', 'Curry', 210.00, 340.00, FALSE, 'Dairy,Nuts', NULL, 18),
+('Mango Lassi', 'Drinks', 'Drinks', NULL, 110.00, TRUE, 'Dairy', NULL, 5);
+```
+
+B. READ (`SELECT` with Filtering) — Customer QR Menu Search & Filters:
+```sql
+-- Fetch all available Veg dishes without Nuts, sorted by price
+SELECT id, name, category, price_half, price_full, deal_badge
+FROM menu_items
+WHERE is_available = TRUE
+  AND is_veg = TRUE
+  AND (allergens IS NULL OR allergens NOT LIKE '%Nuts%')
+ORDER BY price_full ASC;
+```
+
+C. UPDATE (`UPDATE ... SET`) — Moving Order Status & Table Floor Map:
+```sql
+-- Staff clicks "Send to Kitchen" on Order #1
+UPDATE orders
+SET status = 'Cooking',
+    cooking_started_at = NOW(),
+    estimated_ready_at = DATE_ADD(NOW(), INTERVAL 15 MINUTE)
+WHERE id = 1;
+
+-- Update Table T1 status on Live Floor Map
+UPDATE restaurant_tables
+SET status = 'Eating'
+WHERE table_number = 'T1';
+```
+
+D. DELETE (`DELETE FROM`) — Owner Removes a Discontinued Dish:
+```sql
+DELETE FROM menu_items
+WHERE id = 99;
+```
+
+================================================================================
+4. JOINS & AGGREGATIONS (KDS BOARD, BILLS & OWNER ANALYTICS)
+================================================================================
+Because data is split cleanly across normalized tables, `INNER JOIN` and `GROUP BY` combine them into live dashboards and itemized bills.
+
+A. Kitchen Display System (KDS) Query — Fetch Active Items by Station:
+```sql
+SELECT
+    o.id AS order_id,
+    rt.table_number,
+    mi.kitchen_station,
+    mi.name AS dish_name,
+    oi.portion_size,
+    oi.spice_choice,
+    oi.quantity,
+    oi.item_status,
+    TIMESTAMPDIFF(MINUTE, o.cooking_started_at, NOW()) AS elapsed_mins
+FROM order_items oi
+INNER JOIN orders o ON oi.order_id = o.id
+INNER JOIN restaurant_tables rt ON o.table_id = rt.id
+INNER JOIN menu_items mi ON oi.menu_item_id = mi.id
+WHERE o.status IN ('Confirmed', 'Cooking')
+  AND oi.item_status != 'Ready'
+ORDER BY o.placed_at ASC;
+```
+
+B. Auto-Generate Itemized Table Bill (`SUM` & `GROUP BY`):
+```sql
+SELECT
+    rt.table_number,
+    SUM(oi.quantity * oi.unit_price) AS subtotal,
+    ROUND(SUM(oi.quantity * oi.unit_price) * 0.05, 2) AS gst_5_percent,
+    ROUND(SUM(oi.quantity * oi.unit_price) * 1.05, 2) AS total_with_gst
+FROM orders o
+INNER JOIN restaurant_tables rt ON o.table_id = rt.id
+INNER JOIN order_items oi ON o.id = oi.order_id
+WHERE rt.table_number = 'T1'
+  AND o.status != 'Closed'
+GROUP BY rt.table_number;
+```
+
+C. Owner Dashboard — Top-Selling Dishes & Waiter SLA Response Time:
+```sql
+-- Top 5 Best-Selling Dishes
+SELECT
+    mi.name AS dish_name,
+    SUM(oi.quantity) AS total_sold,
+    SUM(oi.quantity * oi.unit_price) AS revenue_generated
+FROM order_items oi
+INNER JOIN menu_items mi ON oi.menu_item_id = mi.id
+GROUP BY mi.id, mi.name
+ORDER BY total_sold DESC
+LIMIT 5;
+
+-- Average Call Waiter Response Speed (in seconds)
+SELECT
+    u.full_name AS waiter_name,
+    COUNT(cwr.id) AS alerts_resolved,
+    ROUND(AVG(cwr.response_seconds), 1) AS avg_response_sec
+FROM call_waiter_requests cwr
+INNER JOIN users u ON cwr.resolved_by = u.id
+WHERE cwr.status = 'Resolved'
+GROUP BY u.id, u.full_name;
+```
+
+================================================================================
+5. DATABASE NORMALIZATION (1NF, 2NF, 3NF) — INTERVIEW FAVORITE
+================================================================================
+Interviewers frequently ask how your database avoids duplicate data:
+- 1NF (First Normal Form): Every cell holds a single atomic value (we never store `"2x Paneer Tikka, 1x Naan"` in one text column; each dish gets its own row in `order_items`).
+- 2NF (Second Normal Form): Every non-key column depends on the entire Primary Key (dish details like `kitchen_station` and `allergens` live in `menu_items`, not repeated inside `order_items`).
+- 3NF (Third Normal Form): No transitive dependencies (table `capacity` and `qr_token` live in `restaurant_tables`, referenced by `table_id` in `orders` and `bills`).
+- Intentional Snapshot Exception: We store `unit_price` inside `order_items` so if the Owner raises Paneer Tikka's price tomorrow, yesterday's historical bills remain accurate!
+
+================================================================================
+6. HANDS-ON PRACTICE CHECKPOINT (DO THIS BEFORE NOTE 03)
+================================================================================
+Open MySQL Workbench (or your MySQL terminal) and:
+1. Run `CREATE DATABASE zaika_db;` and create the 4 tables above.
+2. Insert tables `T1`–`T6` and 5 Indian menu dishes across `Tandoor`, `Curry`, and `Drinks`.
